@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "857911585291",
+    "project_id": "liberresapplication",
+    "storage_bucket": "liberresapplication.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:857911585291:android:da20a8c15264ac8dae350e",
+        "android_client_info": {
+          "package_name": "com.example.liberres_"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwEGdJxmvUvXZN8tV59uU9lZVRCRK0a4E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
