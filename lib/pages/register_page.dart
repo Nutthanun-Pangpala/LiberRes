@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -9,25 +10,48 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
+  static const maroon = Color(0xFF781C1C);
+
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final confirmPasswordController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
 
   bool _isPasswordVisible = false;
   bool _isConfirmVisible = false;
   bool _isLoading = false;
 
+  String _normalizeEmail(String input) {
+    final v = input.trim();
+    if (v.isEmpty) return v;
+    if (v.contains('@')) return v;
+    // กรณีกรอกรหัสนักศึกษา ให้ต่อโดเมนอัตโนมัติ
+    return '$v@lamduan.mfu.ac.th';
+  }
+
+  Future<void> _createUserDoc(User u) async {
+    final ref = FirebaseFirestore.instance.collection('users').doc(u.uid);
+    final studentId = u.email?.split('@').first ?? '';
+    final displayName = u.displayName ?? studentId;
+
+    await ref.set({
+      'displayName': displayName,
+      'studentId': studentId,
+      'photoUrl': u.photoURL,
+      'email': u.email,
+      'role': 'student',
+      'status': 'active', // แทน faculty
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   Future<void> signUp() async {
-    final email = emailController.text.trim();
+    if (!_formKey.currentState!.validate()) return;
+
+    final email = _normalizeEmail(emailController.text);
     final password = passwordController.text.trim();
     final confirmPassword = confirmPasswordController.text.trim();
-
-    if (email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill in all fields")),
-      );
-      return;
-    }
 
     if (password != confirmPassword) {
       ScaffoldMessenger.of(
@@ -38,34 +62,65 @@ class _RegisterPageState extends State<RegisterPage> {
 
     setState(() => _isLoading = true);
     try {
-      await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
+
+      // ตั้ง displayName เป็นรหัสนักศึกษา (ส่วนหน้าโปรไฟล์ค่อยแก้ได้)
+      final user = cred.user!;
+      final defaultName = email.split('@').first;
+      await user.updateDisplayName(defaultName);
+
+      // สร้างเอกสาร users/{uid}
+      await _createUserDoc(user);
+
       if (!mounted) return;
-      Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.green,
           content: Text("Account created successfully!"),
         ),
       );
+
+      // ไปหน้า Home (ปรับตาม route โปรเจคคุณ)
+      Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
+      final msg = _mapAuthError(e);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.redAccent,
-          content: Text(e.message ?? "Sign up failed"),
-        ),
+        SnackBar(backgroundColor: Colors.redAccent, content: Text(msg)),
       );
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _mapAuthError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'email-already-in-use':
+        return 'อีเมลนี้ถูกใช้ไปแล้ว';
+      case 'invalid-email':
+        return 'รูปแบบอีเมลไม่ถูกต้อง';
+      case 'operation-not-allowed':
+        return 'ระบบสมัครผู้ใช้ถูกปิดไว้';
+      case 'weak-password':
+        return 'รหัสผ่านอ่อนเกินไป (อย่างน้อย 6 ตัวอักษร)';
+      default:
+        return e.message ?? 'Sign up failed';
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    const maroon = Color(0xFF781C1C);
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    confirmPasswordController.dispose();
+    super.dispose();
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -130,129 +185,163 @@ class _RegisterPageState extends State<RegisterPage> {
                       ),
                     ],
                   ),
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: InputDecoration(
-                          labelText: "Student ID (Email)",
-                          prefixIcon: const Icon(Icons.person_outline),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(
-                              color: maroon,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      TextField(
-                        controller: passwordController,
-                        obscureText: !_isPasswordVisible,
-                        decoration: InputDecoration(
-                          labelText: "Password",
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _isPasswordVisible
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color: maroon,
-                            ),
-                            onPressed: () => setState(
-                              () => _isPasswordVisible = !_isPasswordVisible,
-                            ),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(
-                              color: maroon,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      TextField(
-                        controller: confirmPasswordController,
-                        obscureText: !_isConfirmVisible,
-                        decoration: InputDecoration(
-                          labelText: "Confirm Password",
-                          prefixIcon: const Icon(Icons.lock_reset_outlined),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _isConfirmVisible
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color: maroon,
-                            ),
-                            onPressed: () => setState(
-                              () => _isConfirmVisible = !_isConfirmVisible,
-                            ),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(
-                              color: maroon,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-                          onPressed: _isLoading ? null : signUp,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: maroon,
-                            shape: RoundedRectangleBorder(
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      children: [
+                        // Email / Student ID
+                        TextFormField(
+                          controller: emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: InputDecoration(
+                            labelText: "Student ID หรือ Email",
+                            hintText: "เช่น 6531503025 หรือ you@mail.com",
+                            prefixIcon: const Icon(Icons.person_outline),
+                            border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            elevation: 3,
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: const BorderSide(
+                                color: maroon,
+                                width: 1.5,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
-                          child: _isLoading
-                              ? const CircularProgressIndicator(
-                                  color: Colors.white,
-                                )
-                              : const Text(
-                                  "Sign Up",
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) {
+                              return 'กรอกรหัสนักศึกษาหรืออีเมล';
+                            }
+                            return null;
+                          },
                         ),
-                      ),
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 16),
 
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text(
-                          "Back to Login",
-                          style: TextStyle(
-                            color: maroon,
-                            fontWeight: FontWeight.w600,
+                        // Password
+                        TextFormField(
+                          controller: passwordController,
+                          obscureText: !_isPasswordVisible,
+                          decoration: InputDecoration(
+                            labelText: "Password",
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _isPasswordVisible
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                                color: maroon,
+                              ),
+                              onPressed: () => setState(
+                                () => _isPasswordVisible = !_isPasswordVisible,
+                              ),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: const BorderSide(
+                                color: maroon,
+                                width: 1.5,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'กรอกรหัสผ่าน';
+                            if (v.length < 6)
+                              return 'รหัสผ่านอย่างน้อย 6 ตัวอักษร';
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Confirm Password
+                        TextFormField(
+                          controller: confirmPasswordController,
+                          obscureText: !_isConfirmVisible,
+                          decoration: InputDecoration(
+                            labelText: "Confirm Password",
+                            prefixIcon: const Icon(Icons.lock_reset_outlined),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _isConfirmVisible
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                                color: maroon,
+                              ),
+                              onPressed: () => setState(
+                                () => _isConfirmVisible = !_isConfirmVisible,
+                              ),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: const BorderSide(
+                                color: maroon,
+                                width: 1.5,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'ยืนยันรหัสผ่าน';
+                            if (v != passwordController.text) {
+                              return 'Passwords do not match';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 28),
+
+                        // Sign Up
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : signUp,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: maroon,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 3,
+                            ),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text(
+                                    "Sign Up",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                           ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 16),
+
+                        TextButton(
+                          onPressed: _isLoading
+                              ? null
+                              : () => Navigator.pop(context),
+                          child: const Text(
+                            "Back to Login",
+                            style: TextStyle(
+                              color: maroon,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
