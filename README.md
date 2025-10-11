@@ -1,4 +1,4 @@
-# 📚 LiberRes  
+# 📚 LiberRes  1.0.2
 ### *A Library Room Reservation Application*
 
 ---
