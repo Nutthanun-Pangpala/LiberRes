@@ -3,32 +3,58 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-class HomePage extends StatelessWidget {
+// นำทางไปหน้า Booking จริง
+import './booking_page.dart';
+
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   static const _maroon = Color(0xFF7A1F1F);
   static const _bg = Color(0xFFF6F6F6);
 
   @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+  State<HomePage> createState() => _HomePageState();
+}
 
+class _HomePageState extends State<HomePage> {
+  /// ใช้เป็น key เพื่อบังคับ StreamBuilder rebuild แบบ hard refresh
+  int _refreshTick = 0;
+
+  Future<void> _handleRefresh() async {
+    // เพิ่มดีเลย์เล็กน้อยเพื่อ UX แล้วบังคับ rebuild
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (mounted) setState(() => _refreshTick++);
+  }
+
+  Future<void> _handleLogout() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      // กลับหน้า Login และเคลียร์สแตก
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ออกจากระบบไม่สำเร็จ: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: HomePage._bg,
       body: RefreshIndicator(
-        onRefresh: () async {
-          await Future<void>.delayed(const Duration(milliseconds: 400));
-        },
+        onRefresh: _handleRefresh,
         child: CustomScrollView(
           physics: const BouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
           slivers: [
-            _FancyAppBar(onLogout: () async => FirebaseAuth.instance.signOut()),
+            _FancyAppBar(onLogout: _handleLogout),
             SliverList(
               delegate: SliverChildListDelegate(const [
                 SizedBox(height: 12),
-                // การ์ดโปรไฟล์
                 _ProfileSectionWrapper(),
                 SizedBox(height: 20),
                 Padding(
@@ -38,10 +64,13 @@ class HomePage extends StatelessWidget {
                 SizedBox(height: 28),
                 _SectionHeader(title: 'ประกาศล่าสุด'),
                 SizedBox(height: 12),
-                _NewsSection(),
-                SizedBox(height: 28),
               ]),
             ),
+            // แยกส่วน News ออกมาเป็น SliverToBoxAdapter จะได้กด refresh แล้ว rebuild ง่าย
+            SliverToBoxAdapter(
+              child: _NewsSection(key: ValueKey('news-$_refreshTick')),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 28)),
           ],
         ),
       ),
@@ -156,7 +185,6 @@ class _FancyAppBar extends StatelessWidget {
 
 /* ----------------------------- PROFILE SECTION ---------------------------- */
 
-/// แยก wrapper เพื่อดึง currentUser ใน build ปัจจุบัน
 class _ProfileSectionWrapper extends StatelessWidget {
   const _ProfileSectionWrapper();
 
@@ -211,6 +239,7 @@ class _ProfileSection extends StatelessWidget {
               role: 'unknown',
               status: 'unknown',
               photoUrl: fallbackPhoto,
+              showSetupHint: true,
             ),
           );
         }
@@ -226,11 +255,14 @@ class _ProfileSection extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _ProfileCard(
-            studentIdTitle: studentId,
+            studentIdTitle: studentId.isEmpty
+                ? 'ยังไม่ได้ตั้งโปรไฟล์'
+                : studentId,
             email: email,
             role: role,
             status: status,
             photoUrl: photoUrl,
+            showSetupHint: studentId.isEmpty || email == '—',
           ),
         );
       },
@@ -239,18 +271,20 @@ class _ProfileSection extends StatelessWidget {
 }
 
 class _ProfileCard extends StatelessWidget {
-  final String studentIdTitle; // แสดง studentId
-  final String email; // แสดงอีเมล
-  final String role; // ชิป
-  final String status; // ชิป
+  final String studentIdTitle;
+  final String email;
+  final String role;
+  final String status;
   final String? photoUrl;
+  final bool showSetupHint;
 
-  _ProfileCard({
+  const _ProfileCard({
     required this.studentIdTitle,
     required this.email,
     required this.role,
     required this.status,
     this.photoUrl,
+    this.showSetupHint = false,
   });
 
   Color _statusColor(String s) {
@@ -355,11 +389,31 @@ class _ProfileCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.black45),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.black45),
+                      ),
+                    ),
+                    if (showSetupHint)
+                      TextButton(
+                        onPressed: () {
+                          // จุดนี้คุณอาจพาไปหน้าแก้โปรไฟล์ในอนาคต
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'ไปที่หน้าแก้ไขโปรไฟล์ (เร็ว ๆ นี้)',
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text('ตั้งค่าโปรไฟล์'),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -462,13 +516,44 @@ class _QuickActions extends StatelessWidget {
         return _ActionTile(
           icon: it.icon,
           label: it.label,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            Navigator.pushNamed(context, it.route);
-          },
+          onTap: () => _navigate(context, it),
         );
       },
     );
+  }
+
+  void _navigate(
+    BuildContext context,
+    ({String label, IconData icon, String route}) it,
+  ) {
+    HapticFeedback.lightImpact();
+
+    switch (it.route) {
+      case '/booking':
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const BookingPage()));
+        return;
+
+      case '/calendar':
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const CalendarPage()));
+        return;
+
+      case '/reservations':
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const ReservationsPage()));
+        return;
+
+      default:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('ยังไม่ได้เตรียมหน้า ${it.label} (${it.route})'),
+          ),
+        );
+    }
   }
 }
 
@@ -567,7 +652,7 @@ class _SectionHeader extends StatelessWidget {
 /* -------------------------------- NEWS LIST -------------------------------- */
 
 class _NewsSection extends StatelessWidget {
-  const _NewsSection();
+  const _NewsSection({super.key});
 
   String _timeAgo(Timestamp? ts) {
     if (ts == null) return '';
@@ -575,6 +660,10 @@ class _NewsSection extends StatelessWidget {
     final dt = ts.toDate();
     final diff = now.difference(dt);
 
+    // กันเคสเวลาอนาคต (นาฬิกาเพี้ยน/ตั้งล่วงหน้า)
+    if (diff.isNegative) {
+      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    }
     if (diff.inSeconds < 60) return 'เมื่อสักครู่';
     if (diff.inMinutes < 60) return '${diff.inMinutes} นาทีที่แล้ว';
     if (diff.inHours < 24) return '${diff.inHours} ชม.ที่แล้ว';
@@ -586,7 +675,7 @@ class _NewsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final newsQuery = FirebaseFirestore.instance
         .collection('news')
-        // ถ้ากฎของคุณบังคับ published=true ให้ปลดคอมเมนต์บรรทัดนี้:
+        // ถ้าจะเปิด publish-only ให้เอาคอมเมนต์ออกแล้วสร้าง index ตาม error hint ของ Firestore
         // .where('published', isEqualTo: true)
         .orderBy('createdAt', descending: true)
         .limit(10)
@@ -845,29 +934,23 @@ class _News {
   /// รองรับกรณีเผลอใส่ createdAt เป็น string/int ใน console
   factory _News.fromMap(String id, Map<String, dynamic> map) {
     Timestamp? ts;
-
     final raw = map['createdAt'];
+
     if (raw is Timestamp) {
       ts = raw;
     } else if (raw is String) {
-      // พยายาม parse เป็น DateTime แล้วแปลงเป็น Timestamp
       final parsed = DateTime.tryParse(raw);
       if (parsed != null) ts = Timestamp.fromDate(parsed);
-    } else if (raw is int) {
-      // รองรับ epoch seconds/millis (เดาแบบง่าย ๆ)
-      if (raw > 1000000000000) {
-        ts = Timestamp.fromMillisecondsSinceEpoch(raw);
-      } else {
-        ts = Timestamp.fromMillisecondsSinceEpoch(raw * 1000);
-      }
+    } else if (raw is num) {
+      // รองรับทั้งวินาทีและมิลลิวินาที
+      final ms = raw > 1000000000000 ? raw.toInt() : (raw.toInt() * 1000);
+      ts = Timestamp.fromMillisecondsSinceEpoch(ms);
     }
 
-    return _News(
-      id: id,
-      title: (map['title'] ?? '') as String,
-      subtitle: (map['subtitle'] ?? '') as String,
-      createdAt: ts,
-    );
+    final title = (map['title'] ?? '').toString();
+    final subtitle = (map['subtitle'] ?? '').toString();
+
+    return _News(id: id, title: title, subtitle: subtitle, createdAt: ts);
   }
 
   Map<String, dynamic> toMap() => {
@@ -877,14 +960,26 @@ class _News {
   };
 }
 
-/* ------------------------------- EXTENSIONS ------------------------------- */
+/* --------------------------- PLACEHOLDER PAGES ---------------------------- */
 
-extension _ColorX on Color {
-  Color darken([double amount = .2]) {
-    final hsl = HSLColor.fromColor(this);
-    final h = hsl.hue,
-        s = hsl.saturation,
-        l = (hsl.lightness - amount).clamp(0.0, 1.0);
-    return HSLColor.fromAHSL(hsl.alpha, h, s, l).toColor();
+class CalendarPage extends StatelessWidget {
+  const CalendarPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Calendar')),
+      body: const Center(child: Text('Calendar – coming soon')),
+    );
+  }
+}
+
+class ReservationsPage extends StatelessWidget {
+  const ReservationsPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('My Reservations')),
+      body: const Center(child: Text('Reservations – coming soon')),
+    );
   }
 }
