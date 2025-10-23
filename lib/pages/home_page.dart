@@ -623,7 +623,7 @@ class _ActionTile extends StatelessWidget {
 class _SectionHeader extends StatelessWidget {
   final String title;
   final VoidCallback? onSeeAll;
-  const _SectionHeader({required this.title, this.onSeeAll});
+  const _SectionHeader({required this.title});
 
   @override
   Widget build(BuildContext context) {
@@ -875,7 +875,6 @@ class _EmptyState extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
-    this.onTap,
   });
 
   @override
