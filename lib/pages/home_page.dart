@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 // นำทางไปหน้า Booking จริง
 import './booking_page.dart';
+import './reservations.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -969,17 +970,6 @@ class CalendarPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Calendar')),
       body: const Center(child: Text('Calendar – coming soon')),
-    );
-  }
-}
-
-class ReservationsPage extends StatelessWidget {
-  const ReservationsPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('My Reservations')),
-      body: const Center(child: Text('Reservations – coming soon')),
     );
   }
 }
