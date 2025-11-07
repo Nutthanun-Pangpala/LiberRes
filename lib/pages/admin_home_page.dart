@@ -75,7 +75,7 @@ class _AdminHolidaysPageState extends State<AdminHolidaysPage> {
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เพิ่มวันหยุด ${dateId} แล้ว')),
+        SnackBar(content: Text('เพิ่มวันหยุด $dateId แล้ว')),
       );
     }
   }
@@ -84,7 +84,7 @@ class _AdminHolidaysPageState extends State<AdminHolidaysPage> {
     await _holidaysRef.doc(dateId).delete();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('ลบวันหยุด ${dateId} แล้ว')),
+      SnackBar(content: Text('ลบวันหยุด $dateId แล้ว')),
     );
   }
 

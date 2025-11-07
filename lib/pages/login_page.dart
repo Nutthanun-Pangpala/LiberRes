@@ -284,8 +284,9 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                           validator: (v) {
                             if (v == null || v.isEmpty) return 'กรอกรหัสผ่าน';
-                            if (v.length < 6)
+                            if (v.length < 6) {
                               return 'รหัสผ่านอย่างน้อย 6 ตัวอักษร';
+                            }
                             return null;
                           },
                         ),

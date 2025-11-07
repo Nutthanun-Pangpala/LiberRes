@@ -50,7 +50,7 @@ class BookingService {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         final snap = await tx.get(slotRef);
         if (snap.exists) {
-          throw Exception("ช่วง ${start}-${end} ของ $date ถูกจองแล้ว");
+          throw Exception("ช่วง $start-$end ของ $date ถูกจองแล้ว");
         }
       }
       // 2) ยึด slot

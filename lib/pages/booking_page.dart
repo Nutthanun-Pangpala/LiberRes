@@ -89,8 +89,9 @@ class _BookingPageState extends State<BookingPage> {
       }
     }
     // เพิ่ม 19:00 สำหรับเวลาสิ้นสุด (ให้เลือก end = 19:00 ได้)
-    if (title.contains("สิ้นสุด"))
+    if (title.contains("สิ้นสุด")) {
       times.add(const TimeOfDay(hour: kCloseHour, minute: 0));
+    }
 
     return await showModalBottomSheet<TimeOfDay>(
       context: context,
@@ -275,8 +276,9 @@ class _BookingPageState extends State<BookingPage> {
                                   .snapshots(),
                               builder: (ctx, snap) {
                                 final docs = snap.data?.docs ?? [];
-                                if (docs.isEmpty)
+                                if (docs.isEmpty) {
                                   return const Text("ยังไม่มีห้องในระบบ");
+                                }
                                 return Wrap(
                                   spacing: 8,
                                   runSpacing: 8,
@@ -492,7 +494,7 @@ class _BookingPageState extends State<BookingPage> {
                                 filled: true,
                                 fillColor: Theme.of(
                                   context,
-                                ).colorScheme.surfaceVariant.withOpacity(.2),
+                                ).colorScheme.surfaceContainerHighest.withOpacity(.2),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                   borderSide: BorderSide(
