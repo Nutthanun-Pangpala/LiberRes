@@ -6,12 +6,19 @@ import 'package:flutter/services.dart';
 // นำทางไปหน้า Booking จริง
 import './booking_page.dart';
 import './reservations.dart';
+// นำเข้าหน้า Settings
+import './settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
-  static const _maroon = Color(0xFF7A1F1F);
-  static const _bg = Color(0xFFF6F6F6);
+  // แก้ไข: เปลี่ยนชื่อจาก _maroon เป็น maroon (Public)
+  static const maroon = Color(0xFF7A1F1F);
+  // แก้ไข: เปลี่ยนชื่อจาก _bg เป็น bg (Public)
+  static const bg = Color(0xFFF6F6F6);
+  // ลบตัวแปรสีที่ไม่ได้ใช้แล้วออก
+  // static const _blue = Color(0xFF1D4ED8);
+  // static const _orange = Color(0xFFF59E0B);
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -43,8 +50,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // แก้ไข: ใช้ HomePage.bg
     return Scaffold(
-      backgroundColor: HomePage._bg,
+      backgroundColor: HomePage.bg,
       body: RefreshIndicator(
         onRefresh: _handleRefresh,
         child: CustomScrollView(
@@ -128,7 +136,8 @@ class _FancyAppBar extends StatelessWidget {
                       width: 58 - (t * 12),
                       height: 58 - (t * 12),
                       decoration: BoxDecoration(
-                        color: HomePage._maroon,
+                        // แก้ไข: ใช้ HomePage.maroon
+                        color: HomePage.maroon,
                         borderRadius: BorderRadius.circular(14),
                         boxShadow: const [
                           BoxShadow(
@@ -488,18 +497,15 @@ class _QuickActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // กำหนดข้อมูลปุ่ม โดยไม่ต้องกำหนดสีที่แตกต่างกัน
     final items = <({String label, IconData icon, String route})>[
-      (label: 'Booking', icon: Icons.menu_book_outlined, route: '/booking'),
+      (label: 'จองพื้นที่', icon: Icons.menu_book_outlined, route: '/booking'),
       (
-        label: 'Calendar',
-        icon: Icons.calendar_month_outlined,
-        route: '/calendar',
-      ),
-      (
-        label: 'การจองของฉัน',
+        label: 'รายการจอง', // เปลี่ยนจาก Calendar เป็น รายการจอง
         icon: Icons.bookmark_border,
         route: '/reservations',
       ),
+      (label: 'การตั้งค่า', icon: Icons.settings_outlined, route: '/settings'),
     ];
 
     return GridView.builder(
@@ -536,16 +542,17 @@ class _QuickActions extends StatelessWidget {
         ).push(MaterialPageRoute(builder: (_) => const BookingPage()));
         return;
 
-      case '/calendar':
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const CalendarPage()));
-        return;
-
       case '/reservations':
         Navigator.of(
           context,
         ).push(MaterialPageRoute(builder: (_) => const ReservationsPage()));
+        return;
+
+      // เพิ่มการนำทางไปหน้า Settings
+      case '/settings':
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
         return;
 
       default:
@@ -562,6 +569,7 @@ class _ActionTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  // ลบ final List<Color> colors; ออก และใช้สีเดิมตามที่ร้องขอ
   const _ActionTile({
     required this.icon,
     required this.label,
@@ -576,6 +584,7 @@ class _ActionTile extends StatelessWidget {
       child: Ink(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
+          // กลับไปใช้ Gradient สีแดง/มารูนเดิมสำหรับทุกปุ่ม
           gradient: const LinearGradient(
             colors: [Color(0xFF7A1F1F), Color(0xFF9B2C2C)],
             begin: Alignment.topLeft,
@@ -640,7 +649,8 @@ class _SectionHeader extends StatelessWidget {
           if (onSeeAll != null)
             TextButton.icon(
               onPressed: onSeeAll,
-              style: TextButton.styleFrom(foregroundColor: HomePage._maroon),
+              // แก้ไข: ใช้ HomePage.maroon
+              style: TextButton.styleFrom(foregroundColor: HomePage.maroon),
               icon: const Icon(Icons.chevron_right),
               label: const Text('ดูทั้งหมด'),
             ),
@@ -655,6 +665,7 @@ class _SectionHeader extends StatelessWidget {
 class _NewsSection extends StatelessWidget {
   const _NewsSection({super.key});
 
+  // แก้ไข: ย้ายเมธอด _timeAgo เข้ามาภายในคลาส _NewsSection
   String _timeAgo(Timestamp? ts) {
     if (ts == null) return '';
     final now = DateTime.now();
@@ -726,6 +737,7 @@ class _NewsSection extends StatelessWidget {
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (_, i) {
             final n = docs[i].data();
+            // แก้ไข: เรียกใช้เมธอด _timeAgo ภายในคลาส
             return _NewsItem(
               title: n.title,
               subtitle: n.subtitle,
@@ -959,17 +971,4 @@ class _News {
     'subtitle': subtitle,
     'createdAt': createdAt ?? FieldValue.serverTimestamp(),
   };
-}
-
-/* --------------------------- PLACEHOLDER PAGES ---------------------------- */
-
-class CalendarPage extends StatelessWidget {
-  const CalendarPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Calendar')),
-      body: const Center(child: Text('Calendar – coming soon')),
-    );
-  }
 }
