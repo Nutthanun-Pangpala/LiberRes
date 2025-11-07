@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'admin_home_page.dart';
 import 'register_page.dart';
 
 class LoginPage extends StatefulWidget {
@@ -70,10 +71,26 @@ class _LoginPageState extends State<LoginPage> {
       final u = cred.user!;
       await _ensureUserDocExists(u);
 
+      // --- START: โค้ดใหม่สำหรับการตรวจสอบ Role และเปลี่ยนเส้นทาง ---
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(u.uid).get();
+      // ดึง role จาก Firestore, ค่าเริ่มต้นคือ 'student'
+      final role = userDoc.data()?['role'] ?? 'student';
+
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('เข้าสู่ระบบสำเร็จ ✅')));
+
+      if (role == 'admin') {
+        // Redirection สำหรับ Admin
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AdminHomePage()), // นำทางไปหน้า Admin
+        );
+      } else {
+        // Redirection สำหรับ Student/Default User (ใช้ route เดิม)
+        Navigator.pushReplacementNamed(context, '/home'); 
+      }
 
       // ถ้าคุณมีระบบ AuthStateListener อยู่แล้ว อาจไม่ต้อง navigate
       // ใส่ Navigator ตามเส้นทางของโปรเจคคุณ

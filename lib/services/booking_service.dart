@@ -102,4 +102,41 @@ class BookingService {
       tx.update(bookingRef, {"status": "canceled"});
     });
   }
+  // ... โค้ดของ BookingService.cancel() ที่มีอยู่
+
+  // --- START: NEW ADMIN CANCEL FUNCTION ---
+
+  static Future<void> adminCancel({
+    required String bookingId,
+    required String roomId,
+    required String date, // "YYYY-MM-DD"
+    required String start, // "HH:mm"
+    required String end, // "HH:mm"
+    String reason = 'Admin cancelled (e.g., No-Show or Abuse)', 
+  }) async {
+    final slots = _slotKeys(start, end);
+    final dayDoc = _db
+        .collection("reservations")
+        .doc(roomId)
+        .collection("dates")
+        .doc(date);
+    final bookingRef = _db.collection("bookings").doc(bookingId);
+
+    await _db.runTransaction((tx) async {
+      // 1) ลบ slots ทั้งหมดโดยไม่ต้องตรวจสอบว่าใครเป็นคนจอง
+      for (final hhmm in slots) {
+        final slotRef = dayDoc.collection("slots").doc(hhmm);
+        tx.delete(slotRef);
+      }
+      // 2) อัพเดตสถานะการจองเป็น 'admin_canceled' 
+      tx.update(bookingRef, {
+        "status": "admin_canceled", // สถานะใหม่สำหรับการยกเลิกโดย admin
+        "cancellationReason": reason,
+        "canceledByAdminAt": FieldValue.serverTimestamp(), // เปลี่ยน field เพื่อให้ track ได้
+      });
+    });
+  }
+
+  // --- END: NEW ADMIN CANCEL FUNCTION ---
 }
+
