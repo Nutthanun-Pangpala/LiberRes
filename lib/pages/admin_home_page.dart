@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:liber_res/pages/addroom_page.dart';
+import 'package:liber_res/services/booking_service.dart';
 
 // --------------------------------------------------------------------------
 // ADMIN FEATURE PAGES (จำลอง UI คล้ายหน้า User Reservations)
@@ -23,7 +25,7 @@ class AdminRoomsPage extends StatelessWidget {
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: const [
+        children: [
           Text(
             'Rooms Management: Create, Edit, Delete',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -33,18 +35,94 @@ class AdminRoomsPage extends StatelessWidget {
             leading: Icon(Icons.add_circle_outline, color: Color(0xFF7A1F1F)),
             title: Text('เพิ่มห้องใหม่'),
             trailing: Icon(Icons.arrow_forward_ios),
-            onTap: null, // TODO: Implement navigation to Create Room form
+            onTap: (){
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const AddRoomPage()),
+                );
+            } // TODO: Implement navigation to Create Room form
           ),
           // TODO: Display list of existing rooms with Edit/Delete buttons
           SizedBox(height: 20),
           Text('รายการห้องที่มีอยู่ (ตัวอย่าง)', style: TextStyle(color: Colors.black54)),
           ListTile(title: Text('Room A'), subtitle: Text('Capacity: 10')),
           ListTile(title: Text('Room B'), subtitle: Text('Capacity: 5')),
+          // (นี่คือโค้ดที่คุณจะคัดลอกไปวางต่อท้าย Room B)
+
+      const SizedBox(height: 10), // เพิ่มเพื่อคั่น
+      const Divider(), // เพิ่มเพื่อคั่น
+      const Text(
+        'รายการห้องจริง (จากฐานข้อมูล)', 
+        style: TextStyle(color: Colors.green, fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 10),
+
+      // --- START: ส่วนที่ดึงข้อมูลห้องจริงจาก FIREBASE ---
+      StreamBuilder<QuerySnapshot>(
+        // 1. สั่งให้ StreamBuilder ไปดึงข้อมูลจาก collection 'rooms'
+        stream: FirebaseFirestore.instance.collection('rooms')
+            //.orderBy('createdAt') // เรียงตามเวลาที่สร้าง ควรแก้แต่ต้องมี firebase ก่อนแก้แค่ลบ // ออกฏ
+            .snapshots(),
+        builder: (context, snapshot) {
+          // 2. ระหว่างรอโหลด
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          // 3. ถ้าดึงข้อมูลไม่ได้
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          }
+          // 4. ถ้าไม่มีข้อมูล (หรือ collection ว่าง)
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text('ยังไม่มีห้องในระบบ (กด + เพื่อเพิ่ม)'),
+              ),
+            );
+          }
+
+          // 5. ถ้ามีข้อมูล
+          final rooms = snapshot.data!.docs;
+
+          // เราใช้ ListView.builder เพื่อสร้างรายการจากข้อมูลที่ดึงมา
+          return ListView.builder(
+            itemCount: rooms.length,
+            shrinkWrap: true, // 👈 สำคัญมาก สำหรับ ListView ซ้อนกัน
+            physics:
+                const NeverScrollableScrollPhysics(), // 👈 สำคัญมาก สำหรับ ListView ซ้อนกัน
+            itemBuilder: (context, index) {
+              final roomData =
+                  rooms[index].data() as Map<String, dynamic>;
+
+              // ดึงข้อมูลจาก field ต่างๆ
+              final roomName = roomData['roomName'] ?? 'N/A';
+              final capacity = roomData['capacity'] ?? 0;
+              final List<String> equipment =
+                  List<String>.from(roomData['equipment'] ?? []);
+
+              // สร้าง Card แสดงผล
+              return Card(
+                color: Colors.lightGreen[50], // เพิ่มสีเขียวอ่อนๆ ให้ดูต่าง
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: ListTile(
+                  title: Text(roomName, style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                      'ความจุ: $capacity คน\nอุปกรณ์: ${equipment.join(', ')}'),
+                  isThreeLine: equipment.isNotEmpty,
+                ),
+              );
+            },
+          );
+        },
+      ),
+      // --- END: ส่วนที่ดึงข้อมูลห้องจริง ---
         ],
       ),
     );
   }
 }
+
+// (คัดลอกโค้ดนี้ไปวางทับ class AdminHolidaysPage เดิม)
 
 // --- 2. จัดการวันหยุด (Admin: Holiday Management) ---
 class AdminHolidaysPage extends StatefulWidget {
@@ -58,8 +136,28 @@ class _AdminHolidaysPageState extends State<AdminHolidaysPage> {
   final CollectionReference _holidaysRef =
       FirebaseFirestore.instance.collection('holidays');
 
-  // ฟังก์ชันสำหรับเพิ่ม/ลบวันหยุดจะอยู่ที่นี่
-  Future<void> _addHoliday() async {
+      bool _isSyncing = false;
+      Future<void> _syncHolidays() async {
+    setState(() => _isSyncing = true);
+    try {
+      int year = DateTime.now().year; // ดึงข้อมูลของปีนี้ (เช่น 2025)
+      await BookingService.syncHolidaysFromAPI(year);
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ซิงค์วันหยุดราชการไทยปี $year สำเร็จ!')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
+      );
+    }
+    setState(() => _isSyncing = false);
+  }
+  // --- START: อัปเกรดฟังก์ชัน _addHoliday ---
+   Future<void> _addHoliday() async {
+    // 1. เลือกวันที่
     final DateTime? pickedDate = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
@@ -67,78 +165,146 @@ class _AdminHolidaysPageState extends State<AdminHolidaysPage> {
       lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
     );
 
-    if (pickedDate != null) {
-      final String dateId = DateFormat('yyyy-MM-dd').format(pickedDate);
-      await _holidaysRef.doc(dateId).set({
-        'reason': 'วันหยุดราชการ/วันสำคัญ',
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เพิ่มวันหยุด $dateId แล้ว')),
-      );
-    }
+    if (pickedDate == null) return; // ผู้ใช้กดยกเลิก
+
+    // 2. (ใหม่) ถามเหตุผล
+    final String? reason = await _showReasonDialog();
+    if (reason == null || reason.isEmpty) return; // ผู้ใช้กดยกเลิก
+
+    // 3. บันทึกข้อมูล
+    final String dateId = DateFormat('yyyy-MM-dd').format(pickedDate);
+    
+    // 4. (ใหม่) บันทึกข้อมูลในรูปแบบใหม่
+    await _holidaysRef.doc(dateId).set({
+      'description': reason, // 👈 ใช้เหตุผลที่กรอก
+      'date': Timestamp.fromDate(pickedDate), // 👈 เก็บวันที่จริง
+      'isManual': true, // 👈 รู้ว่าแอดมินเพิ่มเอง
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('เพิ่มวันหยุด $dateId แล้ว')),
+    );
   }
+
+  // (ใหม่) ฟังก์ชันสำหรับแสดง Dialog ให้กรอกเหตุผล
+  Future<String?> _showReasonDialog() {
+    final TextEditingController reasonController = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('เพิ่มเหตุผล (วันหยุด)'),
+          content: TextField(
+            controller: reasonController,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'เช่น วันหยุดพิเศษบริษัท'),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('ยกเลิก'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text('บันทึก'),
+              onPressed: () {
+                Navigator.of(context).pop(reasonController.text);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+  // --- END: อัปเกรดฟังก์ชัน _addHoliday ---
+
 
   Future<void> _deleteHoliday(String dateId) async {
     await _holidaysRef.doc(dateId).delete();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('ลบวันหยุด $dateId แล้ว')),
-    );
+     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('จัดการวันหยุด (Holidays)'),
+      title: const Text('จัดการวันหยุด (Holidays)'),
         backgroundColor: const Color(0xFF7A1F1F),
         foregroundColor: Colors.white,
+        actions: [
+          if (_isSyncing)
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white))),
+            )
+          else
+            IconButton(
+              icon: Icon(Icons.sync),
+              tooltip: 'ดึงวันหยุดราชการไทย (ปีปัจจุบัน)',
+              onPressed: _syncHolidays,
+            ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addHoliday,
         backgroundColor: const Color(0xFF7A1F1F),
         child: const Icon(Icons.add, color: Colors.white),
       ),
+      
+      // --- START: อัปเกรด StreamBuilder ---
       body: StreamBuilder<QuerySnapshot>(
-        stream: _holidaysRef.orderBy('timestamp').snapshots(),
+        // 1. (ใหม่) เรียงตาม 'date' (วันที่จริง) ไม่ใช่ 'timestamp'
+        stream: _holidaysRef.orderBy('date').snapshots(), 
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            if (snapshot.connectionState == ConnectionState.waiting) {
+             return const Center(child: CircularProgressIndicator());
           }
 
           final holidays = snapshot.data!.docs;
-          if (holidays.isEmpty) {
-            return const Center(child: Text('ไม่มีวันหยุดที่กำหนดไว้'));
+            if (holidays.isEmpty) {
+             return const Center(child: Text('ไม่มีวันหยุดที่กำหนดไว้'));
           }
 
           return ListView.builder(
             itemCount: holidays.length,
             itemBuilder: (context, index) {
               final doc = holidays[index];
-              final dateId = doc.id;
-              final reason = doc['reason'] ?? 'ไม่มีเหตุผล';
+              final data = doc.data() as Map<String, dynamic>;
+              final dateId = doc.id; // 👈 นี่คือ yyyy-MM-dd
+              
+              // 2. (ใหม่) อ่านจาก field 'description'
+              final reason = data['description'] ?? 'ไม่มีเหตุผล';
+              final isManual = data['isManual'] ?? false;
+
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 child: ListTile(
-                  title: Text(dateId, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text(reason),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.red),
-                    onPressed: () => _deleteHoliday(dateId),
-                  ),
+                // (ใหม่) แสดง Icon แยกประเภท
+                leading: Icon(
+                  isManual ? Icons.person_add_alt_1 : Icons.api,
+                  color: isManual ? Colors.blue : Colors.purple,
                 ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
+                   title: Text(dateId, style: const TextStyle(fontWeight: FontWeight.bold)),
+                   subtitle: Text(reason),
+                   trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red),
+                   onPressed: () => _deleteHoliday(dateId),
+                 ),
+               ),
+             );
+           },
+         );
+       },
+     ),
+      // --- END: อัปเกรด StreamBuilder ---
+     );
+   }
 }
 
 // --- 3. จัดการการจอง (Admin: Manage Reservations) ---
@@ -563,3 +729,4 @@ class _ActionTile extends StatelessWidget {
     );
   }
 }
+

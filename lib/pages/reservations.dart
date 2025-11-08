@@ -52,6 +52,7 @@ extension BookingStatusX on BookingStatus {
 class Booking {
   final String id;
   final String roomId;
+  final String roomName;
   final String uid;
   final String date; // YYYY-MM-DD
   final String start; // HH:mm
@@ -62,6 +63,7 @@ class Booking {
   Booking({
     required this.id,
     required this.roomId,
+    required this.roomName,
     required this.uid,
     required this.date,
     required this.start,
@@ -74,6 +76,7 @@ class Booking {
     final m = (doc.data() ?? {}) as Map<String, dynamic>;
     return Booking(
       id: doc.id,
+      roomName: (m['roomName'] ?? m['roomId'] ?? '').toString(),
       roomId: (m['roomId'] ?? '').toString(),
       uid: (m['uid'] ?? '').toString(),
       date: (m['date'] ?? '').toString(),
@@ -326,7 +329,7 @@ class _FancyList extends StatelessWidget {
       builder: (_) => AlertDialog(
         title: const Text('ยืนยันการยกเลิก'),
         content: Text(
-          'ยกเลิกการจองห้อง ${b.roomId}\n${b.date}  ${b.start}-${b.end}',
+          'ยกเลิกการจองห้อง ${b.roomName}\n${b.date}  ${b.start}-${b.end}',
         ),
         actions: [
           TextButton(
@@ -426,7 +429,7 @@ class _BookingCardUX extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            b.roomId.isEmpty ? 'ไม่ทราบห้อง' : b.roomId,
+                            b.roomName.isEmpty ? 'ไม่ทราบห้อง' : b.roomName,
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w800,

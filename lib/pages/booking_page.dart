@@ -18,7 +18,11 @@ class _BookingPageState extends State<BookingPage> {
   static const int kCloseHour = 19; // 19:00 (ไม่รวมปลาย)
 
   String? _roomId;
+  String? _roomName;
   DateTime _date = DateTime.now();
+  bool _isHoliday = false;
+  bool _isLoadingHoliday = false;
+  String _holidayReason = '';
   final _purposeCtrl = TextEditingController();
 
   TimeOfDay _start = const TimeOfDay(hour: 9, minute: 0);
@@ -64,6 +68,7 @@ class _BookingPageState extends State<BookingPage> {
   }
 
   // ===== Pickers =====
+ // (วางทับฟังก์ชัน _pickDate เดิม)
   Future<void> _pickDate() async {
     final d = await showDatePicker(
       context: context,
@@ -71,7 +76,38 @@ class _BookingPageState extends State<BookingPage> {
       firstDate: DateTime.now().subtract(const Duration(days: 0)),
       lastDate: DateTime.now().add(const Duration(days: 60)),
     );
-    if (d != null) setState(() => _date = d);
+
+    if (d == null) return; // ผู้ใช้กดยกเลิก
+
+    // 1. เริ่มเช็กวันหยุด
+    setState(() {
+      _date = d;
+      _isLoadingHoliday = true; // 👈 เริ่มหมุน
+      _isHoliday = false;
+      _holidayReason = '';
+    });
+
+    try {
+      // 2. เช็กใน Firestore
+      final String dateId = DateFormat('yyyy-MM-dd').format(d);
+      final doc = await FirebaseFirestore.instance
+          .collection('holidays')
+          .doc(dateId)
+          .get();
+
+      if (doc.exists) {
+        // 3. ถ้าเจอ (เป็นวันหยุด)
+        setState(() {
+          _isHoliday = true;
+          _holidayReason = doc.data()?['description'] ?? 'วันหยุด';
+        });
+      }
+    } catch (e) {
+      print("Error checking holiday: $e");
+      _toast("ไม่สามารถตรวจสอบวันหยุดได้: $e");
+    } finally {
+      setState(() => _isLoadingHoliday = false); // 👈 หยุดหมุน
+    }
   }
 
   // กริดเลือกเวลา (09:00–19:00) ช่องที่ถูกจองกดไม่ได้
@@ -167,6 +203,8 @@ class _BookingPageState extends State<BookingPage> {
 
   // ===== Validation =====
   String? _validate(Set<String> busy) {
+
+    if (_isHoliday) return "ไม่สามารถจองได้: $_holidayReason";
     if (_roomId == null) return "กรุณาเลือกห้อง";
     if (_fmtTime(_start).compareTo(_fmtTime(_end)) >= 0) {
       return "เวลาเริ่มต้องน้อยกว่าเวลาสิ้นสุด";
@@ -199,6 +237,7 @@ class _BookingPageState extends State<BookingPage> {
       await BookingService.reserve(
         uid: user.uid,
         roomId: _roomId!,
+        roomName: _roomName ?? 'N/A',
         date: dateStr,
         start: _fmtTime(_start),
         end: _fmtTime(_end),
@@ -245,6 +284,17 @@ class _BookingPageState extends State<BookingPage> {
         body: StreamBuilder<Set<String>>(
           stream: slotsStream,
           builder: (ctx, snap) {
+            if (snap.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Text('เกิดข้อผิดพลาดในการโหลดช่องจอง: ${snap.error}'),
+                  ),
+                );
+              }
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
             final busy = snap.data ?? <String>{};
 
             return Stack(
@@ -272,7 +322,7 @@ class _BookingPageState extends State<BookingPage> {
                             StreamBuilder<QuerySnapshot>(
                               stream: FirebaseFirestore.instance
                                   .collection("rooms")
-                                  .orderBy("name")
+                                  .orderBy("roomName")
                                   .snapshots(),
                               builder: (ctx, snap) {
                                 final docs = snap.data?.docs ?? [];
@@ -284,13 +334,16 @@ class _BookingPageState extends State<BookingPage> {
                                   runSpacing: 8,
                                   children: docs.map((d) {
                                     final id = d.id;
-                                    final name = (d["name"] ?? id).toString();
+                                    final name = (d["roomName"] ?? id).toString();
                                     final selected = _roomId == id;
                                     return ChoiceChip(
                                       label: Text(name),
                                       selected: selected,
                                       onSelected: (_) =>
-                                          setState(() => _roomId = id),
+                                          setState(() {
+                                              _roomId = id;
+                                              _roomName = name; // 👈 [เพิ่มบรรทัดนี้]
+                                            }),
                                       selectedColor: kMaroon.withOpacity(.15),
                                       labelStyle: TextStyle(
                                         color: selected
@@ -362,7 +415,7 @@ class _BookingPageState extends State<BookingPage> {
                                     time: _fmtTime(_start),
                                     icon: Icons.access_time,
                                     color: kMaroon,
-                                    onTap: () async {
+                                    onTap: (_isHoliday || _isLoadingHoliday) ? null : () async {
                                       final picked = await _showTimeGrid(
                                         disabledKeys: busy,
                                         title: "เลือกเวลาเริ่ม",
@@ -400,7 +453,7 @@ class _BookingPageState extends State<BookingPage> {
                                     time: _fmtTime(_end),
                                     icon: Icons.access_time_filled,
                                     color: kMaroon,
-                                    onTap: () async {
+                                    onTap: (_isHoliday || _isLoadingHoliday) ? null : () async { // 👈 แก้ไข
                                       final picked = await _showTimeGrid(
                                         disabledKeys: busy,
                                         title: "เลือกเวลาสิ้นสุด",
@@ -507,6 +560,18 @@ class _BookingPageState extends State<BookingPage> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    if (_isLoadingHoliday)
+                      const Center(child: Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: CircularProgressIndicator(),
+                      ))
+                    else if (_isHoliday)
+                      _InfoBanner(
+                        text: "วันที่เลือกเป็นวันหยุด: $_holidayReason",
+                        type: BannerType.error,
+                        color: Colors.red,
+                      ),
                     const SizedBox(height: 12),
 
                     // ===== รายการจองของวัน (เรียงฝั่ง client; ไม่ต้องมี composite index) =====
@@ -707,7 +772,7 @@ class _TimeTile extends StatelessWidget {
   final String label;
   final String time;
   final IconData icon;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Color color;
   const _TimeTile({
     required this.label,
