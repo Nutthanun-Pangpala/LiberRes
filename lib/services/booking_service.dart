@@ -31,18 +31,30 @@ class BookingService {
   }
 
   // --- [Logic เก่า 1] reserve (จอง + อนุมัติทันที) ---
+  /// ตัวอย่างปรับปรุง reserve(...) — แนะนำให้ใช้แทนเวอร์ชันเก่า
   static Future<void> reserve({
     required String roomId,
     required String roomName,
     required String date, // "YYYY-MM-DD"
     required String start, // "HH:mm"
     required String end, // "HH:mm"
-    String? uid, // uid ของ user
-    String? userName, // ชื่อ user
+    String? uid,
+    String? userName,
     String? purpose,
+    bool force =
+        false, // ถ้า true: พยายามอนุญาตแม้เป็นวันหยุด (ต้องตรวจสิทธิ์เพิ่มเติม)
   }) async {
     final slots = _slotKeys(start, end);
     if (slots.isEmpty) throw Exception("เวลาไม่ถูกต้อง");
+
+    final holidaysRef = _db.collection('holidays').doc(date);
+
+    // 1) เบื้องต้น: ถ้าเป็นวันหยุดและไม่ได้ force ให้หยุดทันที (เร็ว)
+    final holidaySnapshot = await holidaysRef.get();
+    if (holidaySnapshot.exists && !force) {
+      final desc = (holidaySnapshot.data()?['description'] ?? 'วันหยุด');
+      throw Exception('ไม่สามารถจองได้ในวันหยุด: $desc');
+    }
 
     final dayDoc = _db
         .collection("reservations")
@@ -52,7 +64,15 @@ class BookingService {
 
     final bookingRef = _db.collection("bookings").doc();
 
+    // 2) ทำตรวจสอบสำคัญทั้งหมดใน transaction อีกครั้ง (รวมเช็ก holiday เพื่อป้องกัน race)
     await _db.runTransaction((tx) async {
+      // ตรวจ holiday อีกครั้งภายใน transaction
+      final holidaySnapInTx = await tx.get(holidaysRef);
+      if (holidaySnapInTx.exists && !force) {
+        final desc = (holidaySnapInTx.data()?['description'] ?? 'วันหยุด');
+        throw Exception('ไม่สามารถจองได้ในวันหยุด: $desc');
+      }
+
       // 1) ตรวจ slot ว่าง
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
@@ -61,27 +81,37 @@ class BookingService {
           throw Exception("ช่วง $start-$end ของ $date ถูกจองแล้ว");
         }
       }
+
       // 2) ยึด slot
       final now = FieldValue.serverTimestamp();
       for (final hhmm in slots) {
         tx.set(dayDoc.collection("slots").doc(hhmm), {
           "by": uid ?? "guest",
           "at": now,
-          "bookingId": bookingRef.id, // 👈 อ้างอิง ID ใบจอง
+          "bookingId": bookingRef.id,
         });
       }
-      // 3) เขียนใบจองรวม
+
+      // 3) เขียนใบจองรวม — แนะนำตั้งเป็น pending หากต้องการ workflow ตรวจสอบ
+      final bool autoApprove =
+          !holidaySnapshot.exists; // ตัวอย่าง: อนุมัติอัตโนมัติถ้าไม่ใช่วันหยุด
       tx.set(bookingRef, {
         "roomId": roomId,
         "roomName": roomName,
         "uid": uid ?? "guest",
-        "userName": userName ?? "Guest User", // 👈 เพิ่มชื่อ
+        "userName": userName ?? "Guest User",
         "date": date,
         "start": start,
         "end": end,
         "purpose": purpose ?? "",
-        "status": "approved", // 👈 [สำคัญ] อนุมัติทันที
+        "status": autoApprove ? "approved" : "pending",
         "createdAt": now,
+        // audit (ถ้ามีการ force ให้บันทึก)
+        if (force) "forcedBy": uid ?? "unknown",
+        if (force) "forcedAt": now,
+        if (holidaySnapshot.exists)
+          "holidayReason":
+              (holidaySnapshot.data()?['description'] ?? 'วันหยุด'),
       });
     });
   }

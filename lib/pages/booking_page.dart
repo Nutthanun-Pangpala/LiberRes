@@ -1,16 +1,15 @@
-// booking_page.dart (ฉบับแก้ไข Crash และ Overflow)
-
+// booking_page.dart (ครบถ้วน: prefetch holidays, disable holiday dates, UI)
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-// สมมติว่าไฟล์ service อยู่ที่นี่ (ตามโค้ดเดิม)
-// คุณต้องสร้างไฟล์นี้และคลาส BookingService ถ้ายังไม่มี
+// สมมติว่าไฟล์ service อยู่ที่นี่ (ตามโค้ดของคุณ)
 import '../services/booking_service.dart';
 
 class BookingPage extends StatefulWidget {
   const BookingPage({super.key});
+
   @override
   State<BookingPage> createState() => _BookingPageState();
 }
@@ -53,17 +52,21 @@ class _BookingPageState extends State<BookingPage> {
 
   // ===== State =====
   String? _roomId;
-  String? _roomName; // (คงไว้จากโค้ด "อันใหม่")
+  String? _roomName;
   DateTime _date = DateTime.now();
   final _purposeCtrl = TextEditingController();
-  int? _selectedSlotIndex; // Index ของ kFixedSlots ที่ถูกเลือก
+  int? _selectedSlotIndex;
 
-  // (คงไว้จากโค้ด "อันใหม่" สำหรับเช็กวันหยุด)
+  // holiday state for the selected date
   bool _isHoliday = false;
   bool _isLoadingHoliday = false;
   String _holidayReason = '';
 
-  // (เพิ่ม State สำหรับ Modal Loader)
+  // Prefetched holiday dates (yyyy-MM-dd) for a range (e.g., this year + next)
+  Set<String> _holidayDates = {};
+  bool _isLoadingHolidayRange = false;
+
+  // booking loader
   bool _isBooking = false;
 
   final _fmtDate = DateFormat("yyyy-MM-dd");
@@ -73,6 +76,7 @@ class _BookingPageState extends State<BookingPage> {
   String _two(int n) => n.toString().padLeft(2, '0');
   String _fmtTime(TimeOfDay t) => '${_two(t.hour)}:${_two(t.minute)}';
 
+  // generate 15-min keys between a and b, used to check busy keys
   List<String> _keysRange(TimeOfDay a, TimeOfDay b) {
     final keys = <String>[];
     var cur = DateTime(2000, 1, 1, a.hour, a.minute);
@@ -89,19 +93,70 @@ class _BookingPageState extends State<BookingPage> {
     return _keysRange(slot['start']!, slot['end']!).toSet();
   }
 
-  // ===== Pickers =====
-  Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime.now().subtract(const Duration(days: 0)),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
-    );
+  // ===== Lifecycle =====
+  @override
+  void initState() {
+    super.initState();
+    // Prefetch holiday range and check selected date
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadHolidaysRange(
+        yearsAhead: 1,
+      ).then((_) => _checkHolidayForCurrentDate());
+    });
+  }
 
-    if (d == null) return;
+  @override
+  void dispose() {
+    _purposeCtrl.dispose();
+    super.dispose();
+  }
 
+  // ===== Load holidays (range) from Firestore =====
+  Future<void> _loadHolidaysRange({int yearsAhead = 1}) async {
+    setState(() => _isLoadingHolidayRange = true);
+    try {
+      final startYear = DateTime.now().year;
+      final endYear = startYear + yearsAhead;
+      final col = FirebaseFirestore.instance.collection('holidays');
+      final fmt = DateFormat('yyyy-MM-dd');
+      final Set<String> loaded = {};
+
+      // We'll query per year to keep queries simple and avoid complex range issues
+      for (int y = startYear; y <= endYear; y++) {
+        final startTs = Timestamp.fromDate(DateTime(y, 1, 1));
+        final endTs = Timestamp.fromDate(DateTime(y, 12, 31, 23, 59, 59));
+        final q = await col
+            .where('date', isGreaterThanOrEqualTo: startTs)
+            .where('date', isLessThanOrEqualTo: endTs)
+            .get();
+
+        for (final doc in q.docs) {
+          final data = doc.data() as Map<String, dynamic>;
+          final ts = data['date'] as Timestamp?;
+          if (ts != null) {
+            loaded.add(fmt.format(ts.toDate()));
+          } else {
+            // fallback: use doc id if it's in yyyy-MM-dd form
+            loaded.add(doc.id);
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _holidayDates = loaded;
+      });
+    } catch (e) {
+      print('Error loading holidays range: $e');
+      // don't fail hard — UI will still work; user can proceed
+    } finally {
+      if (mounted) setState(() => _isLoadingHolidayRange = false);
+    }
+  }
+
+  // ===== Check if currently selected date is holiday (single doc check) =====
+  Future<void> _checkHolidayForCurrentDate() async {
     setState(() {
-      _date = d;
       _isLoadingHoliday = true;
       _isHoliday = false;
       _holidayReason = '';
@@ -109,33 +164,89 @@ class _BookingPageState extends State<BookingPage> {
     });
 
     try {
-      final String dateId = DateFormat('yyyy-MM-dd').format(d);
-      final doc = await FirebaseFirestore.instance
-          .collection('holidays')
-          .doc(dateId)
-          .get();
-
-      // ‼️ แก้ไข: ตรวจสอบว่า Widget ยังอยู่ (mounted) ก่อนเรียก setState
-      if (!mounted) return;
-
-      if (doc.exists) {
-        setState(() {
-          _isHoliday = true;
-          _holidayReason = doc.data()?['description'] ?? 'วันหยุด';
-        });
+      final String dateId = dateStr;
+      // Prefer local prefetched set (fast), but double-check doc in Firestore
+      if (_holidayDates.contains(dateId)) {
+        // Try to read doc for description
+        final doc = await FirebaseFirestore.instance
+            .collection('holidays')
+            .doc(dateId)
+            .get();
+        if (doc.exists) {
+          setState(() {
+            _isHoliday = true;
+            _holidayReason = (doc.data()?['description'] ?? 'วันหยุด')
+                .toString();
+          });
+        } else {
+          // If not found doc (rare), still mark holiday based on prefetched id
+          setState(() {
+            _isHoliday = true;
+            _holidayReason = 'วันหยุด';
+          });
+        }
+      } else {
+        // Not in prefetched set; do a direct doc check (covers case when range not loaded)
+        final doc = await FirebaseFirestore.instance
+            .collection('holidays')
+            .doc(dateId)
+            .get();
+        if (doc.exists) {
+          setState(() {
+            _isHoliday = true;
+            _holidayReason = (doc.data()?['description'] ?? 'วันหยุด')
+                .toString();
+          });
+        } else {
+          setState(() {
+            _isHoliday = false;
+            _holidayReason = '';
+          });
+        }
       }
     } catch (e) {
-      print("Error checking holiday: $e");
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก _toast
+      print('Error checking holiday: $e');
       if (mounted) {
-        _toast("ไม่สามารถตรวจสอบวันหยุดได้ (อาจเกิดจากเครือข่าย)");
+        _toast('ไม่สามารถตรวจสอบวันหยุดได้ (อาจเกิดจากเครือข่าย)');
       }
     } finally {
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก setState
-      if (mounted) {
-        setState(() => _isLoadingHoliday = false);
-      }
+      if (mounted) setState(() => _isLoadingHoliday = false);
     }
+  }
+
+  // ===== Pickers =====
+  Future<void> _pickDate() async {
+    // Ensure holidays loaded (best effort)
+    if (_holidayDates.isEmpty && !_isLoadingHolidayRange) {
+      await _loadHolidaysRange(yearsAhead: 1);
+    }
+
+    final today = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 7)),
+      selectableDayPredicate: (d) {
+        // If holiday range still loading, allow selection to avoid blocking UX.
+        if (_isLoadingHolidayRange) return true;
+        final id = _fmtDate.format(d);
+        // disallow if it's in holiday set
+        return !_holidayDates.contains(id);
+      },
+    );
+
+    if (picked == null) return;
+
+    setState(() {
+      _date = picked;
+      _isLoadingHoliday = true;
+      _isHoliday = false;
+      _holidayReason = '';
+      _selectedSlotIndex = null;
+    });
+
+    await _checkHolidayForCurrentDate();
   }
 
   // ===== Validation =====
@@ -164,7 +275,6 @@ class _BookingPageState extends State<BookingPage> {
       return;
     }
 
-    // ‼️ (เพิ่ม UX) เริ่มแสดง Modal Loader
     setState(() => _isBooking = true);
 
     final selectedSlot = kFixedSlots[_selectedSlotIndex!];
@@ -188,13 +298,11 @@ class _BookingPageState extends State<BookingPage> {
       });
     } catch (e) {
       if (mounted) {
-        _toast(e.toString().replaceFirst("Exception: ", ""));
+        final msg = e.toString().replaceFirst("Exception: ", "");
+        _toast(msg);
       }
     } finally {
-      // ‼️ (เพิ่ม UX) หยุดแสดง Modal Loader
-      if (mounted) {
-        setState(() => _isBooking = false);
-      }
+      if (mounted) setState(() => _isBooking = false);
     }
   }
 
@@ -357,7 +465,7 @@ class _BookingPageState extends State<BookingPage> {
                             const Divider(),
 
                             // --- UI ใหม่: Grid ช่วงเวลาตายตัว ---
-                            if (_isLoadingHoliday)
+                            if (_isLoadingHoliday || _isLoadingHolidayRange)
                               const Center(
                                 child: Padding(
                                   padding: EdgeInsets.all(16.0),
@@ -381,6 +489,7 @@ class _BookingPageState extends State<BookingPage> {
                               _FixedSlotGrid(
                                 busyKeys: busy,
                                 selectedIndex: _selectedSlotIndex,
+                                isHoliday: _isHoliday,
                                 onSelect: (index) {
                                   setState(() {
                                     _selectedSlotIndex = index;
@@ -557,10 +666,7 @@ class _BookingPageState extends State<BookingPage> {
                   child: SafeArea(
                     child: FilledButton.icon(
                       icon: const Icon(Icons.check_circle),
-                      onPressed:
-                          (_isHoliday ||
-                              _isLoadingHoliday ||
-                              _isBooking) // (ปิดปุ่มถ้ากำลังจอง)
+                      onPressed: (_isHoliday || _isLoadingHoliday || _isBooking)
                           ? null
                           : () => _submit(busy),
                       style: FilledButton.styleFrom(
@@ -617,28 +723,41 @@ class _BookingPageState extends State<BookingPage> {
 
 // ===== UI Components =====
 
-// (UI Widget ใหม่สำหรับแสดง Grid 1-Hour Slots)
+// Fixed slot grid (รับ isHoliday เพื่อ disable ปุ่มเมื่อวันหยุด)
 class _FixedSlotGrid extends StatelessWidget {
   final Set<String> busyKeys; // "HHmm"
   final int? selectedIndex;
   final ValueChanged<int> onSelect;
+  final bool isHoliday;
 
   const _FixedSlotGrid({
     required this.busyKeys,
     required this.selectedIndex,
     required this.onSelect,
+    this.isHoliday = false,
   });
 
-  // (ดึง 15-min keys สำหรับ 1-hour slot ที่กำหนด)
-  Set<String> _getKeysForSlot(int index) {
-    final slot = _BookingPageState.kFixedSlots[index];
-    // (ย้าย Utilities มาเป็น static หรือ helper ภายนอก)
-    // (ในตัวอย่างนี้ เราจะเรียกใช้แบบ Instance ชั่วคราว)
-    return _BookingPageState()._keysRange(slot['start']!, slot['end']!).toSet();
+  // helper: 2-digit
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  // create 15-min keys
+  Set<String> _keysRangeFor(TimeOfDay a, TimeOfDay b) {
+    final keys = <String>{};
+    var cur = DateTime(2000, 1, 1, a.hour, a.minute);
+    final end = DateTime(2000, 1, 1, b.hour, b.minute);
+    while (cur.isBefore(end)) {
+      keys.add('${_two(cur.hour)}${_two(cur.minute)}');
+      cur = cur.add(const Duration(minutes: 15));
+    }
+    return keys;
   }
 
-  String _fmtTime(TimeOfDay t) =>
-      '${_BookingPageState()._two(t.hour)}:${_BookingPageState()._two(t.minute)}';
+  Set<String> _getKeysForSlotIndex(int index) {
+    final slot = _BookingPageState.kFixedSlots[index];
+    return _keysRangeFor(slot['start']!, slot['end']!).toSet();
+  }
+
+  String _fmtTime(TimeOfDay t) => '${_two(t.hour)}:${_two(t.minute)}';
 
   @override
   Widget build(BuildContext context) {
@@ -651,33 +770,40 @@ class _FixedSlotGrid extends StatelessWidget {
         crossAxisSpacing: 10,
         childAspectRatio: 3.5,
       ),
-      itemCount: _BookingPageState.kFixedSlots.length, // 7 slots
+      itemCount: _BookingPageState.kFixedSlots.length,
       itemBuilder: (_, i) {
         final slot = _BookingPageState.kFixedSlots[i];
         final slotStart = slot['start']!;
         final slotEnd = slot['end']!;
         final label = "${_fmtTime(slotStart)} - ${_fmtTime(slotEnd)}";
 
-        final keysNeeded = _getKeysForSlot(i);
+        final keysNeeded = _getKeysForSlotIndex(i);
         final bool isBusy = keysNeeded.intersection(busyKeys).isNotEmpty;
         final bool isSelected = selectedIndex == i;
 
+        final bool disableButton = isBusy || isHoliday;
+
         return ElevatedButton(
-          onPressed: isBusy ? null : () => onSelect(i),
+          onPressed: disableButton ? null : () => onSelect(i),
           style: ElevatedButton.styleFrom(
             backgroundColor: isSelected
                 ? _BookingPageState.kMaroon
-                : (isBusy ? Colors.grey.shade300 : Colors.white),
+                : (disableButton ? Colors.grey.shade300 : Colors.white),
             foregroundColor: isSelected
                 ? Colors.white
-                : (isBusy ? Colors.grey.shade500 : _BookingPageState.kMaroon),
+                : (disableButton
+                      ? Colors.grey.shade500
+                      : _BookingPageState.kMaroon),
             side: BorderSide(color: _BookingPageState.kMaroon.withOpacity(.35)),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-            elevation: isBusy ? 0 : 1,
+            elevation: disableButton ? 0 : 1,
           ),
-          child: Text(label),
+          child: Text(
+            isHoliday ? "$label (วันหยุด)" : label,
+            textAlign: TextAlign.center,
+          ),
         );
       },
     );
@@ -721,7 +847,6 @@ class _SectionHeaderLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // ‼️ แก้ไข: ห่อ Padding ด้วย Flexible เพื่อป้องกัน Overflow
         Flexible(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -730,7 +855,7 @@ class _SectionHeaderLine extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-              overflow: TextOverflow.ellipsis, // กันข้อความยาวเกิน
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
