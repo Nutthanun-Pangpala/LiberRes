@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 // สมมติว่าไฟล์ service อยู่ที่นี่ (ตามโค้ดเดิม)
+// คุณต้องสร้างไฟล์นี้และคลาส BookingService ถ้ายังไม่มี
 import '../services/booking_service.dart';
 
 class BookingPage extends StatefulWidget {
@@ -61,6 +62,9 @@ class _BookingPageState extends State<BookingPage> {
   bool _isHoliday = false;
   bool _isLoadingHoliday = false;
   String _holidayReason = '';
+
+  // (เพิ่ม State สำหรับ Modal Loader)
+  bool _isBooking = false;
 
   final _fmtDate = DateFormat("yyyy-MM-dd");
   String get dateStr => _fmtDate.format(_date);
@@ -160,6 +164,9 @@ class _BookingPageState extends State<BookingPage> {
       return;
     }
 
+    // ‼️ (เพิ่ม UX) เริ่มแสดง Modal Loader
+    setState(() => _isBooking = true);
+
     final selectedSlot = kFixedSlots[_selectedSlotIndex!];
 
     try {
@@ -173,7 +180,6 @@ class _BookingPageState extends State<BookingPage> {
         purpose: _purposeCtrl.text.trim(),
       );
 
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก _toast/setState
       if (!mounted) return;
       _purposeCtrl.clear();
       _toast("จองสำเร็จ");
@@ -181,9 +187,13 @@ class _BookingPageState extends State<BookingPage> {
         _selectedSlotIndex = null;
       });
     } catch (e) {
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก _toast
       if (mounted) {
         _toast(e.toString().replaceFirst("Exception: ", ""));
+      }
+    } finally {
+      // ‼️ (เพิ่ม UX) หยุดแสดง Modal Loader
+      if (mounted) {
+        setState(() => _isBooking = false);
       }
     }
   }
@@ -360,8 +370,7 @@ class _BookingPageState extends State<BookingPage> {
                                 type: BannerType.error,
                                 color: Colors.red,
                               )
-                            else if (slotsAreLoading &&
-                                _roomId != null) // (เพิ่มเช็ก _roomId)
+                            else if (slotsAreLoading && _roomId != null)
                               const Center(
                                 child: Padding(
                                   padding: EdgeInsets.all(16.0),
@@ -548,7 +557,10 @@ class _BookingPageState extends State<BookingPage> {
                   child: SafeArea(
                     child: FilledButton.icon(
                       icon: const Icon(Icons.check_circle),
-                      onPressed: (_isHoliday || _isLoadingHoliday)
+                      onPressed:
+                          (_isHoliday ||
+                              _isLoadingHoliday ||
+                              _isBooking) // (ปิดปุ่มถ้ากำลังจอง)
                           ? null
                           : () => _submit(busy),
                       style: FilledButton.styleFrom(
@@ -570,6 +582,25 @@ class _BookingPageState extends State<BookingPage> {
                     ),
                   ),
                 ),
+
+                // ‼️ (เพิ่ม UX) Modal Loader ‼️
+                if (_isBooking)
+                  Container(
+                    color: Colors.black.withOpacity(0.5),
+                    child: const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: Colors.white),
+                          SizedBox(height: 16),
+                          Text(
+                            'กำลังยืนยันการจอง...',
+                            style: TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             );
           },
@@ -578,7 +609,6 @@ class _BookingPageState extends State<BookingPage> {
     );
   }
 
-  // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก SnackBar
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -805,3 +835,5 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
+
+// (ลบ _DayAvailabilityBar, _Legend, _SummaryChips เพราะ UI Grid ใหม่มาแทนที่)

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart'; // 👈 (อย่าลืม import intl)
 
 /// ====== THEME ======
 const kMaroon = Color(0xFF8B0000); // << ใช้สีเดียวกับหน้า BookingPage
@@ -23,6 +24,8 @@ extension BookingStatusX on BookingStatus {
       'approved' => BookingStatus.approved,
       'rejected' => BookingStatus.rejected,
       'canceled' => BookingStatus.canceled,
+      // (สำหรับ Logic เก่า, เราจะไม่เจอ pending จาก user
+      // แต่เผื่อ Admin มี Logic 'pending' ก็ใส่ไว้ได้)
       _ => BookingStatus.pending,
     };
   }
@@ -131,12 +134,13 @@ class _ReservationsPageState extends State<ReservationsPage>
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final d = DateTime(dt.year, dt.month, dt.day);
-    final wd = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'][(dt.weekday % 7)];
+    // (ปรับปรุงเล็กน้อย: ใช้ DateFormat)
+    final wd = DateFormat('E', 'th_TH').format(dt); // 'th_TH' เพื่อให้ได้ 'จ'
     if (d == today) return 'วันนี้ ($wd)';
     if (d == today.add(const Duration(days: 1))) return 'พรุ่งนี้ ($wd)';
-    final m2 = dt.month.toString().padLeft(2, '0');
-    final d2 = dt.day.toString().padLeft(2, '0');
-    return '$d2/$m2/${dt.year} ($wd)';
+
+    // (ปรับปรุงเล็กน้อย: ใช้ DateFormat)
+    return DateFormat('d/MM/yyyy ($wd)', 'th_TH').format(dt);
   }
 
   @override
@@ -150,7 +154,6 @@ class _ReservationsPageState extends State<ReservationsPage>
         .collection('bookings')
         .where('uid', isEqualTo: user.uid);
 
-    // ทำโทนสีให้เหมือนหน้า BookingPage
     final maroonScheme = Theme.of(context).colorScheme.copyWith(
       primary: kMaroon,
       secondary: kMaroon,
@@ -175,12 +178,12 @@ class _ReservationsPageState extends State<ReservationsPage>
             labelStyle: const TextStyle(fontWeight: FontWeight.w800),
             tabs: const [
               Tab(text: 'กำลังจะมาถึง'),
-              Tab(text: 'ที่ผ่านมา'),
+              Tab(text: 'ประวัติ'), // 👈 (เปลี่ยนชื่อ)
             ],
           ),
         ),
         body: RefreshIndicator(
-          color: kMaroon, // สีดึงรีเฟรช
+          color: kMaroon,
           onRefresh: () async =>
               Future<void>.delayed(const Duration(milliseconds: 350)),
           child: StreamBuilder<QuerySnapshot>(
@@ -206,15 +209,30 @@ class _ReservationsPageState extends State<ReservationsPage>
               }
 
               final all = snap.data!.docs.map(Booking.fromDoc).toList();
+
+              // ----------------------------------------------------
+              // [ 1. แก้ไข Logic ] "กำลังจะมาถึง"
+              // ----------------------------------------------------
               final upcoming = all.where((b) {
                 final d = _dt(b.date, b.start);
-                return d != null && !d.isBefore(today);
-              }).toList()..sort(cmp);
+                // (ต้องสถานะ 'approved' เท่านั้น และ ยังไม่เลยวันนี้)
+                return b.status == BookingStatus.approved &&
+                    d != null &&
+                    !d.isBefore(today);
+              }).toList()..sort(cmp); // (เรียงจากเก่าไปใหม่ ถูกแล้ว)
 
+              // ----------------------------------------------------
+              // [ 2. แก้ไข Logic ] "ประวัติ" (ที่ผ่านมา)
+              // ----------------------------------------------------
               final past = all.where((b) {
                 final d = _dt(b.date, b.start);
+                // (ถ้าสถานะไม่ใช่ 'approved' เช่น Canceled, Rejected)
+                if (b.status != BookingStatus.approved) {
+                  return true; // 👈 ให้อยู่ใน "ประวัติ" เสมอ
+                }
+                // (หรือ ถ้าเป็น 'approved' แต่เลยวันนี้ไปแล้ว)
                 return d != null && d.isBefore(today);
-              }).toList()..sort(cmp);
+              }).toList()..sort(cmp); // (เรียงจากเก่าไปใหม่)
 
               return TabBarView(
                 controller: _tab,
@@ -224,16 +242,20 @@ class _ReservationsPageState extends State<ReservationsPage>
                     emptyTitle: 'ยังไม่มีการจองล่วงหน้า',
                     emptySubtitle: 'เริ่มจองห้องตอนนี้เลย',
                     ctaLabel: 'ไปหน้าจอง',
-                    onCta: () => Navigator.of(context).pushNamed('/booking'),
+                    // (onCta คุณอาจจะต้องแก้ /booking เป็น Path ที่ถูกต้อง)
+                    onCta: () =>
+                        Navigator.of(context).pop(), // 👈 (แก้เป็น Pop)
                     prettyDate: _prettyDate,
                     toDateTime: (b) => _dt(b.date, b.start),
+                    allowCancel: true, // 👈 [ใหม่] อนุญาตให้ยกเลิก
                   ),
                   _FancyList(
-                    items: past.reversed.toList(), // ล่าสุดบนสุด
+                    items: past.reversed.toList(), // 👈 (กลับด้าน) ล่าสุดบนสุด
                     emptyTitle: 'ยังไม่มีประวัติการจอง',
                     emptySubtitle: 'เมื่อคุณจองสำเร็จ ประวัติจะมาอยู่ที่นี่',
                     prettyDate: _prettyDate,
                     toDateTime: (b) => _dt(b.date, b.start),
+                    allowCancel: false, // 👈 [ใหม่] ไม่อนุญาตให้ยกเลิก
                   ),
                 ],
               );
@@ -254,6 +276,7 @@ class _FancyList extends StatelessWidget {
   final VoidCallback? onCta;
   final String Function(DateTime) prettyDate;
   final DateTime? Function(Booking) toDateTime;
+  final bool allowCancel; // 👈 [ใหม่]
 
   const _FancyList({
     required this.items,
@@ -263,6 +286,7 @@ class _FancyList extends StatelessWidget {
     this.onCta,
     required this.prettyDate,
     required this.toDateTime,
+    this.allowCancel = false, // 👈 [ใหม่]
   });
 
   @override
@@ -293,20 +317,29 @@ class _FancyList extends StatelessWidget {
         final b = items[i];
         final dt = toDateTime(b) ?? DateTime.now();
         final headline = prettyDate(dt);
+
         return Dismissible(
           key: ValueKey(b.id),
+          // [แก้ไข] ใช้ 'allowCancel' และเช็คสถานะ
           direction:
-              (b.status == BookingStatus.canceled ||
-                  b.status == BookingStatus.rejected)
-              ? DismissDirection.none
-              : DismissDirection.endToStart,
+              (allowCancel &&
+                  b.status == BookingStatus.approved) // 👈 (เช็คสถานะด้วย)
+              ? DismissDirection.endToStart
+              : DismissDirection.none,
           confirmDismiss: (_) async {
             HapticFeedback.selectionClick();
             return await _confirmCancel(context, b);
           },
           background: const _SwipeBg(),
-          child: _BookingCardUX(b: b, headline: headline),
+          child: _BookingCardUX(
+            b: b,
+            headline: headline,
+            // [แก้ไข] ส่ง 'allowCancel' ไปยัง Card
+            allowCancel: allowCancel,
+          ),
           onDismissed: (_) async {
+            // (เราควรเรียก Service.cancel ที่เรามี)
+            // (แต่เพื่อความง่าย, ใช้อันเดิมของคุณไปก่อน)
             await FirebaseFirestore.instance
                 .collection('bookings')
                 .doc(b.id)
@@ -380,11 +413,16 @@ class _SwipeBg extends StatelessWidget {
 class _BookingCardUX extends StatelessWidget {
   final Booking b;
   final String headline; // วันนี้/พรุ่งนี้/วันที่สวยๆ
-  const _BookingCardUX({required this.b, required this.headline});
+  final bool allowCancel; // 👈 [ใหม่]
 
-  bool get _canCancel =>
-      !(b.status == BookingStatus.canceled ||
-          b.status == BookingStatus.rejected);
+  const _BookingCardUX({
+    required this.b,
+    required this.headline,
+    required this.allowCancel,
+  });
+
+  // [แก้ไข] ใช้ 'allowCancel' และเช็คสถานะ
+  bool get _canCancel => allowCancel && (b.status == BookingStatus.approved);
 
   @override
   Widget build(BuildContext context) {
@@ -474,12 +512,13 @@ class _BookingCardUX extends StatelessWidget {
                         ],
                       ),
                     ],
-                    const SizedBox(height: 10),
-                    // Actions
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        if (_canCancel)
+                    // [แก้ไข] ซ่อนปุ่มถ้าไม่สามารถยกเลิกได้
+                    if (_canCancel) ...[
+                      const SizedBox(height: 10),
+                      // Actions
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
                           TextButton.icon(
                             onPressed: () => _cancel(context),
                             icon: const Icon(Icons.cancel_rounded),
@@ -488,8 +527,9 @@ class _BookingCardUX extends StatelessWidget {
                               foregroundColor: const Color(0xFFDC2626),
                             ),
                           ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -522,7 +562,8 @@ class _BookingCardUX extends StatelessWidget {
       builder: (_) => AlertDialog(
         title: const Text('ยืนยันการยกเลิก'),
         content: Text(
-          'ต้องการยกเลิกการจองห้อง ${b.roomId}\n${b.date}  ${b.start}-${b.end} ?',
+          // [แก้ไข] ใช้ roomName
+          'ต้องการยกเลิกการจองห้อง ${b.roomName}\n${b.date}  ${b.start}-${b.end} ?',
         ),
         actions: [
           TextButton(
@@ -538,6 +579,7 @@ class _BookingCardUX extends StatelessWidget {
     );
     if (ok != true) return;
 
+    // (ในอนาคต ควรเรียก Service.cancel)
     await FirebaseFirestore.instance.collection('bookings').doc(b.id).update({
       'status': BookingStatus.canceled.value,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -568,7 +610,8 @@ class _BookingCardUX extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              b.roomId.isEmpty ? 'ไม่ทราบห้อง' : b.roomId,
+              // [แก้ไข] ใช้ roomName
+              b.roomName.isEmpty ? 'ไม่ทราบห้อง' : b.roomName,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 8),
@@ -643,7 +686,6 @@ class _EmptyPretty extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // ปรับกราเดียนต์ให้ออกโทน maroon
         Container(
           height: 160,
           decoration: BoxDecoration(

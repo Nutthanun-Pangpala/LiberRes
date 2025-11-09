@@ -1,38 +1,54 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-// ตรวจสอบว่า import service ของคุณถูกต้อง
-import 'package:liber_res/services/booking_service.dart';
 
-class AddRoomPage extends StatefulWidget {
-  const AddRoomPage({Key? key}) : super(key: key);
+class EditRoomPage extends StatefulWidget {
+  // เราจะรับ 'roomDoc' (ข้อมูลห้องเดิม) เข้ามา
+  final DocumentSnapshot roomDoc;
+
+  const EditRoomPage({Key? key, required this.roomDoc}) : super(key: key);
 
   @override
-  _AddRoomPageState createState() => _AddRoomPageState();
+  _EditRoomPageState createState() => _EditRoomPageState();
 }
 
-class _AddRoomPageState extends State<AddRoomPage> {
+class _EditRoomPageState extends State<EditRoomPage> {
   final _formKey = GlobalKey<FormState>();
   final _roomNameController = TextEditingController();
   final _capacityController = TextEditingController();
   final _equipmentController = TextEditingController();
 
   bool _isLoading = false;
-
-  // --- กำหนดสีหลักเพื่อง่ายต่อการแก้ไข ---
   final Color primaryColor = const Color(0xFF7A1F1F);
 
+  @override
+  void initState() {
+    super.initState();
+    // เมื่อหน้าโหลด, ดึงข้อมูลเดิมจาก 'roomDoc' มาใส่ใน Controller
+    _loadExistingData();
+  }
+
+  void _loadExistingData() {
+    final data = widget.roomDoc.data() as Map<String, dynamic>;
+
+    _roomNameController.text = data['roomName'] ?? '';
+    _capacityController.text = (data['capacity'] ?? 0).toString();
+
+    // แปลง List equipment กลับเป็น String (เช่น ["TV", "Mic"] -> "TV, Mic")
+    final List<String> equipmentList = List<String>.from(
+      data['equipment'] ?? [],
+    );
+    _equipmentController.text = equipmentList.join(', ');
+  }
+
   Future<void> _submitForm() async {
-    // 1. ตรวจสอบว่าฟอร์มถูกต้องหรือไม่
     if (!_formKey.currentState!.validate()) {
-      return; // ถ้าไม่ถูกต้อง, หยุดการทำงาน
+      return;
     }
 
     setState(() => _isLoading = true);
 
-    // 2. [แก้ Bug] ใช้ int.tryParse() เพื่อความปลอดภัย
     final int? capacity = int.tryParse(_capacityController.text);
-
-    // 3. ตรวจสอบค่า capacity ที่แปลงแล้ว
     if (capacity == null) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
@@ -41,26 +57,28 @@ class _AddRoomPageState extends State<AddRoomPage> {
       return;
     }
 
-    // 4. แปลง String อุปกรณ์เป็น List
     List<String> equipmentList = _equipmentController.text
-        .split(',') // แยกด้วยลูกน้ำ
-        .map((e) => e.trim()) // ลบช่องว่างหน้า-หลัง
-        .where((e) => e.isNotEmpty) // ไม่เอาค่าว่าง
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
         .toList();
 
     try {
-      // 5. เรียกใช้ Service
-      await BookingService.addRoom(
-        roomName: _roomNameController.text,
-        capacity: capacity, // ใช้ค่าที่แปลงอย่างปลอดภัยแล้ว
-        equipment: equipmentList,
-      );
+      // [สำคัญ] เราใช้ .update() แทน .add()
+      await FirebaseFirestore.instance
+          .collection('rooms')
+          .doc(widget.roomDoc.id) // 👈 ระบุ ID ของห้องที่จะอัปเดต
+          .update({
+            'roomName': _roomNameController.text,
+            'capacity': capacity,
+            'equipment': equipmentList,
+          });
 
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('เพิ่มห้องสำเร็จ!')));
-      Navigator.pop(context); // กลับไปหน้า Admin Home
+      ).showSnackBar(SnackBar(content: Text('อัปเดตห้องสำเร็จ!')));
+      Navigator.pop(context); // กลับไปหน้า Admin Rooms
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -78,7 +96,7 @@ class _AddRoomPageState extends State<AddRoomPage> {
     super.dispose();
   }
 
-  // --- [UI/UX] สร้างฟังก์ชันช่วยสำหรับ InputDecoration ---
+  // (ยก UI/UX ที่เราทำไว้ใน AddRoomPage มาใช้)
   InputDecoration _buildInputDecoration(
     String label,
     IconData icon, {
@@ -88,15 +106,9 @@ class _AddRoomPageState extends State<AddRoomPage> {
     return InputDecoration(
       labelText: label,
       hintText: hint,
-      helperText: helper, // [UI/UX] เพิ่ม helper text
-      prefixIcon: Icon(
-        icon,
-        color: primaryColor.withOpacity(0.8),
-      ), // [UI/UX] เพิ่ม Icon
-      border: OutlineInputBorder(
-        // [UI/UX] ใช้กรอบสี่เหลี่ยม
-        borderRadius: BorderRadius.circular(12.0),
-      ),
+      helperText: helper,
+      prefixIcon: Icon(icon, color: primaryColor.withOpacity(0.8)),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12.0)),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12.0),
         borderSide: BorderSide(color: primaryColor, width: 2),
@@ -112,19 +124,19 @@ class _AddRoomPageState extends State<AddRoomPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('เพิ่มห้องใหม่'),
+        title: Text(
+          'แก้ไขห้อง: ${widget.roomDoc['roomName']}',
+        ), // 👈 เปลี่ยน Title
         backgroundColor: primaryColor,
         foregroundColor: Colors.white,
       ),
-      // [UI/UX] ใช้ SingleChildScrollView + Column
       body: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.all(24.0), // เพิ่ม Padding รอบนอก
+          padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
             child: Column(
               children: [
-                // ช่องกรอกชื่อห้อง
                 TextFormField(
                   controller: _roomNameController,
                   decoration: _buildInputDecoration(
@@ -134,8 +146,7 @@ class _AddRoomPageState extends State<AddRoomPage> {
                   validator: (value) =>
                       value!.isEmpty ? 'กรุณาใส่ชื่อห้อง' : null,
                 ),
-                SizedBox(height: 20), // เพิ่มระยะห่าง
-                // ช่องกรอกความจุ
+                SizedBox(height: 20),
                 TextFormField(
                   controller: _capacityController,
                   decoration: _buildInputDecoration(
@@ -148,30 +159,23 @@ class _AddRoomPageState extends State<AddRoomPage> {
                       value!.isEmpty ? 'กรุณาใส่ความจุ' : null,
                 ),
                 SizedBox(height: 20),
-                // ช่องกรอกอุปกรณ์
                 TextFormField(
                   controller: _equipmentController,
                   decoration: _buildInputDecoration(
                     'อุปกรณ์',
                     Icons.devices_other_outlined,
                     hint: 'เช่น Projector, Whiteboard, TV',
-                    helper:
-                        'คั่นแต่ละรายการด้วยลูกน้ำ ( , )', // [UI/UX] ย้ำตรงนี้
+                    helper: 'คั่นแต่ละรายการด้วยลูกน้ำ ( , )',
                   ),
                 ),
                 SizedBox(height: 32),
-                // ปุ่มบันทึก
                 ElevatedButton(
                   onPressed: _isLoading ? null : _submitForm,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: Colors.white,
-                    minimumSize: const Size(
-                      double.infinity,
-                      50,
-                    ), // [UI/UX] ขนาดเต็มจอและสูง
+                    minimumSize: const Size(double.infinity, 50),
                     shape: RoundedRectangleBorder(
-                      // [UI/UX] มุมมน
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
@@ -181,7 +185,10 @@ class _AddRoomPageState extends State<AddRoomPage> {
                             Colors.white,
                           ),
                         )
-                      : Text('บันทึกห้อง', style: TextStyle(fontSize: 16)),
+                      : Text(
+                          'บันทึกการแก้ไข',
+                          style: TextStyle(fontSize: 16),
+                        ), // 👈 เปลี่ยน Text
                 ),
               ],
             ),
