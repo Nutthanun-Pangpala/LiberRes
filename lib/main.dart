@@ -1,8 +1,9 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
+// import 'pages/wrapper.dart'; // (อันเก่า)
+import './splash_screen.dart'; // (อันใหม่)
 import 'firebase_options.dart';
-import 'pages/wrapper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +20,9 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'LiberRes Login',
       theme: ThemeData(primarySwatch: Colors.red),
-      home: const Wrapper(),
+
+      // ‼️ แก้ไข: เปลี่ยน home จาก Wrapper เป็น SplashScreen
+      home: const SplashScreen(),
     );
   }
 }
