@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'liberresapplication.firebasestorage.app',
     measurementId: 'G-BZ9JFX53JG',
   );
+
 }

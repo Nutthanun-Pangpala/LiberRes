@@ -24,25 +24,39 @@ class BookingService {
     var cur = start;
     while (cur.isBefore(end)) {
       keys.add(_toHHmmKey(cur));
-      // (สมมติ 15 นาที)
       cur = cur.add(const Duration(minutes: 15));
     }
     return keys;
   }
 
-  // --- [Logic เก่า 1] reserve (จอง + อนุมัติทันที) ---
+  // --- [Logic แก้ไข] reserve (เพิ่มการตรวจสอบ) ---
   static Future<void> reserve({
     required String roomId,
     required String roomName,
     required String date, // "YYYY-MM-DD"
     required String start, // "HH:mm"
     required String end, // "HH:mm"
-    String? uid, // uid ของ user
-    String? userName, // ชื่อ user
+    String? uid,
+    String? userName,
     String? purpose,
   }) async {
     final slots = _slotKeys(start, end);
     if (slots.isEmpty) throw Exception("เวลาไม่ถูกต้อง");
+
+    // ‼️ [เพิ่มจุดที่ 1] ตรวจสอบเสาร์-อาทิตย์ ‼️
+    final DateTime bookingDate;
+    try {
+      bookingDate = DateTime.parse(date); // date คือ "YYYY-MM-DD"
+    } catch (e) {
+      throw Exception("รูปแบบวันที่ ($date) ไม่ถูกต้อง");
+    }
+
+    if (bookingDate.weekday == DateTime.saturday ||
+        bookingDate.weekday == DateTime.sunday) {
+      throw Exception("ไม่สามารถจองได้: ปิดทำการ (วันเสาร์-อาทิตย์)");
+    }
+    // ‼️ [จบจุดที่ 1] ‼️
+
 
     final dayDoc = _db
         .collection("reservations")
@@ -52,8 +66,24 @@ class BookingService {
 
     final bookingRef = _db.collection("bookings").doc();
 
+    // ‼️ [เพิ่มจุดที่ 2] อ้างอิง doc วันหยุด ‼️
+    // เราจะใช้ 'date' (YYYY-MM-DD) ซึ่งตรงกับ ID ของ collection 'holidays'
+    final holidayDocRef = _db.collection("holidays").doc(date);
+    // ‼️ [จบจุดที่ 2] ‼️
+
+
     await _db.runTransaction((tx) async {
-      // 1) ตรวจ slot ว่าง
+    
+      // ‼️ [เพิ่มจุดที่ 3] ตรวจสอบวันหยุด (ต้องทำใน Transaction) ‼️
+      final holidaySnap = await tx.get(holidayDocRef);
+      if (holidaySnap.exists) {
+        final reason = holidaySnap.data()?['description'] ?? 'ปิดทำการ';
+        // โยน Error ออกไปให้หน้าบ้านรับทราบ
+        throw Exception("ไม่สามารถจองได้: $date ($reason)");
+      }
+      // ‼️ [จบจุดที่ 3] ‼️
+
+      // 1) ตรวจ slot ว่าง (โค้ดเดิม)
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         final snap = await tx.get(slotRef);
@@ -61,31 +91,33 @@ class BookingService {
           throw Exception("ช่วง $start-$end ของ $date ถูกจองแล้ว");
         }
       }
-      // 2) ยึด slot
+      // 2) ยึด slot (โค้ดเดิม)
       final now = FieldValue.serverTimestamp();
       for (final hhmm in slots) {
         tx.set(dayDoc.collection("slots").doc(hhmm), {
           "by": uid ?? "guest",
           "at": now,
-          "bookingId": bookingRef.id, // 👈 อ้างอิง ID ใบจอง
+          "bookingId": bookingRef.id,
         });
       }
-      // 3) เขียนใบจองรวม
+      // 3) เขียนใบจองรวม (โค้ดเดิม)
       tx.set(bookingRef, {
         "roomId": roomId,
         "roomName": roomName,
         "uid": uid ?? "guest",
-        "userName": userName ?? "Guest User", // 👈 เพิ่มชื่อ
+        "userName": userName ?? "Guest User",
         "date": date,
         "start": start,
         "end": end,
         "purpose": purpose ?? "",
-        "status": "approved", // 👈 [สำคัญ] อนุมัติทันที
+        "status": "approved", 
         "createdAt": now,
       });
     });
   }
 
+  // --- (โค้ดส่วนที่เหลือ... cancel, adminCancel, addRoom, syncHolidays) ---
+  // ... (วางโค้ดส่วนที่เหลือของ service.dart ที่คุณมี) ...
   // --- [Logic เก่า 2] cancel (User ยกเลิกเอง) ---
   static Future<void> cancel({
     required String bookingId,
@@ -107,7 +139,6 @@ class BookingService {
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         final snap = await tx.get(slotRef);
-        // (เช็คว่าเป็นเจ้าของ Slot จริง)
         if (snap.exists && snap.data()?["by"] == uid) {
           tx.delete(slotRef);
         }
@@ -134,12 +165,10 @@ class BookingService {
     final bookingRef = _db.collection("bookings").doc(bookingId);
 
     await _db.runTransaction((tx) async {
-      // 1) ลบ slots (Admin ลบได้เลย ไม่ต้องเช็ค)
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         tx.delete(slotRef);
       }
-      // 2) อัพเดตสถานะ
       tx.update(bookingRef, {
         "status": "admin_canceled",
         "cancellationReason": reason,

@@ -1,12 +1,10 @@
-// booking_page.dart (ฉบับแก้ไข Crash และ Overflow)
+// booking_page.dart (ฉบับแก้ไข: กลับไปใช้ Logic "เช็กทีหลัง")
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-// สมมติว่าไฟล์ service อยู่ที่นี่ (ตามโค้ดเดิม)
-// คุณต้องสร้างไฟล์นี้และคลาส BookingService ถ้ายังไม่มี
 import '../services/booking_service.dart';
 
 class BookingPage extends StatefulWidget {
@@ -19,7 +17,6 @@ class _BookingPageState extends State<BookingPage> {
   // ===== Theme & Open Hours (ใช้ 10:30 - 17:30) =====
   static const Color kMaroon = Color(0xFF8B0000);
 
-  // (กำหนดช่วงเวลาตายตัว 1 ชั่วโมง)
   static const List<Map<String, TimeOfDay>> kFixedSlots = [
     {
       'start': TimeOfDay(hour: 10, minute: 30),
@@ -53,17 +50,16 @@ class _BookingPageState extends State<BookingPage> {
 
   // ===== State =====
   String? _roomId;
-  String? _roomName; // (คงไว้จากโค้ด "อันใหม่")
+  String? _roomName;
   DateTime _date = DateTime.now();
   final _purposeCtrl = TextEditingController();
-  int? _selectedSlotIndex; // Index ของ kFixedSlots ที่ถูกเลือก
+  int? _selectedSlotIndex;
 
-  // (คงไว้จากโค้ด "อันใหม่" สำหรับเช็กวันหยุด)
-  bool _isHoliday = false;
-  bool _isLoadingHoliday = false;
-  String _holidayReason = '';
+  // --- [แก้ไข] คืนชีพ State เดิมกลับมา ---
+  bool _isLoadingHolidayCheck = false; // โชว์ loading หลังเลือกวันที่
+  bool _isHoliday = false; // วันที่เลือกเป็นวันหยุดหรือไม่
+  String _holidayReason = ''; // เหตุผล (เช่น "ปิดทำการ")
 
-  // (เพิ่ม State สำหรับ Modal Loader)
   bool _isBooking = false;
 
   final _fmtDate = DateFormat("yyyy-MM-dd");
@@ -89,56 +85,76 @@ class _BookingPageState extends State<BookingPage> {
     return _keysRange(slot['start']!, slot['end']!).toSet();
   }
 
+  // --- [แก้ไข] ลบ initState, _fetchHolidays, _isDaySelectable ออก ---
+  // (เราจะไปเช็กใน _pickDate แทน)
+
+
   // ===== Pickers =====
+  // --- [แก้ไข] ใช้ Logic "เลือกก่อน ค่อยเช็ก" ---
   Future<void> _pickDate() async {
+    // 1. ให้ผู้ใช้เลือกวันไหนก็ได้ (ลบ selectableDayPredicate ออก)
     final d = await showDatePicker(
       context: context,
       initialDate: _date,
-      firstDate: DateTime.now().subtract(const Duration(days: 0)),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
+      // (ตั้ง firstDate ให้อยู่ก่อนวันนี้เล็กน้อย เพื่อกันบั๊กที่วันแรกเลือกไม่ได้)
+      firstDate: DateTime.now().subtract(const Duration(days: 7)),
+      lastDate: DateTime(2101),
     );
 
-    if (d == null) return;
+    if (d == null) return; // ผู้ใช้กดยกเลิก
 
+    // 2. เริ่มตรวจสอบ (โชว์ Loading)
     setState(() {
       _date = d;
-      _isLoadingHoliday = true;
+      _selectedSlotIndex = null;
+      _isLoadingHolidayCheck = true;
       _isHoliday = false;
       _holidayReason = '';
-      _selectedSlotIndex = null;
     });
 
+    // 3. ตรวจสอบวันที่
     try {
+      // 3a. ตรวจสอบเสาร์-อาทิตย์ (ตามที่คุณต้องการ)
+      if (d.weekday == DateTime.saturday || d.weekday == DateTime.sunday) {
+        if (!mounted) return;
+        setState(() {
+          _isHoliday = true;
+          _holidayReason = "ปิดทำการ (วันเสาร์-อาทิตย์)";
+        });
+        return; // จบการทำงาน
+      }
+      
+      // 3b. ตรวจสอบกับ Firebase collection 'holidays'
       final String dateId = DateFormat('yyyy-MM-dd').format(d);
       final doc = await FirebaseFirestore.instance
           .collection('holidays')
           .doc(dateId)
           .get();
 
-      // ‼️ แก้ไข: ตรวจสอบว่า Widget ยังอยู่ (mounted) ก่อนเรียก setState
       if (!mounted) return;
 
       if (doc.exists) {
+        // ถ้าเจอ = เป็นวันหยุด
         setState(() {
           _isHoliday = true;
-          _holidayReason = doc.data()?['description'] ?? 'วันหยุด';
+          // ใช้ข้อความตามที่ user ขอ "ปิดทำการ"
+          _holidayReason = doc.data()?['description'] ?? "ปิดทำการ";
         });
       }
     } catch (e) {
-      print("Error checking holiday: $e");
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก _toast
       if (mounted) {
-        _toast("ไม่สามารถตรวจสอบวันหยุดได้ (อาจเกิดจากเครือข่าย)");
+        _toast("ไม่สามารถตรวจสอบวันหยุดได้: $e");
       }
     } finally {
-      // ‼️ แก้ไข: ตรวจสอบ mounted ก่อนเรียก setState
+      // 4. ตรวจสอบเสร็จ (เอา Loading ออก)
       if (mounted) {
-        setState(() => _isLoadingHoliday = false);
+        setState(() => _isLoadingHolidayCheck = false);
       }
     }
   }
 
   // ===== Validation =====
+  // --- [แก้ไข] เพิ่มการเช็ก _isHoliday กลับมา ---
   String? _validate(Set<String> busy) {
     if (_isHoliday) return "ไม่สามารถจองได้: $_holidayReason";
     if (_roomId == null) return "กรุณาเลือกห้อง";
@@ -164,7 +180,6 @@ class _BookingPageState extends State<BookingPage> {
       return;
     }
 
-    // ‼️ (เพิ่ม UX) เริ่มแสดง Modal Loader
     setState(() => _isBooking = true);
 
     final selectedSlot = kFixedSlots[_selectedSlotIndex!];
@@ -172,6 +187,7 @@ class _BookingPageState extends State<BookingPage> {
     try {
       await BookingService.reserve(
         uid: user.uid,
+        userName: user.displayName ?? user.email ?? 'Unknown User',
         roomId: _roomId!,
         roomName: _roomName ?? 'N/A',
         date: dateStr,
@@ -188,10 +204,10 @@ class _BookingPageState extends State<BookingPage> {
       });
     } catch (e) {
       if (mounted) {
+        // (แสดง error จาก backend)
         _toast(e.toString().replaceFirst("Exception: ", ""));
       }
     } finally {
-      // ‼️ (เพิ่ม UX) หยุดแสดง Modal Loader
       if (mounted) {
         setState(() => _isBooking = false);
       }
@@ -248,7 +264,7 @@ class _BookingPageState extends State<BookingPage> {
                 ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
                   children: [
-                    // ===== เลือกห้อง =====
+                    // ===== เลือกห้อง (ถูกต้องแล้ว) =====
                     Card(
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -356,17 +372,24 @@ class _BookingPageState extends State<BookingPage> {
                             ),
                             const Divider(),
 
-                            // --- UI ใหม่: Grid ช่วงเวลาตายตัว ---
-                            if (_isLoadingHoliday)
+                            // --- [แก้ไข] เปลี่ยน UI กลับมาเช็ก _isLoadingHolidayCheck และ _isHoliday ---
+                            if (_isLoadingHolidayCheck)
                               const Center(
                                 child: Padding(
                                   padding: EdgeInsets.all(16.0),
-                                  child: CircularProgressIndicator(),
+                                  child: Column(
+                                    children: [
+                                      CircularProgressIndicator(),
+                                      SizedBox(height: 8),
+                                      Text("กำลังตรวจสอบวันที่..."),
+                                    ],
+                                  ),
                                 ),
                               )
                             else if (_isHoliday)
                               _InfoBanner(
-                                text: "วันที่เลือกเป็นวันหยุด: $_holidayReason",
+                                // แสดง Banner บอกว่า "ปิดทำการ"
+                                text: "ไม่สามารถจองได้: $_holidayReason",
                                 type: BannerType.error,
                                 color: Colors.red,
                               )
@@ -407,7 +430,7 @@ class _BookingPageState extends State<BookingPage> {
 
                     const SizedBox(height: 12),
 
-                    // ===== วัตถุประสงค์ =====
+                    // ===== วัตถุประสงค์ (ถูกต้องแล้ว) =====
                     Card(
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -449,9 +472,8 @@ class _BookingPageState extends State<BookingPage> {
                     const SizedBox(height: 12),
 
                     // ===== รายการจองของวัน =====
-                    if (_roomId != null &&
-                        !_isLoadingHoliday &&
-                        !_isHoliday) ...[
+                    // --- [แก้ไข] เปลี่ยนเงื่อนไขการแสดงผลกลับมา ---
+                    if (_roomId != null && !_isLoadingHolidayCheck && !_isHoliday) ...[
                       _SectionHeaderLine(
                         title: "รายการจองของ ${_roomId!} | $dateStr",
                         color: kMaroon,
@@ -481,8 +503,8 @@ class _BookingPageState extends State<BookingPage> {
                             final ma = a.data() as Map<String, dynamic>;
                             final mb = b.data() as Map<String, dynamic>;
                             return (ma["start"] ?? "").toString().compareTo(
-                              (mb["start"] ?? "").toString(),
-                            );
+                                  (mb["start"] ?? "").toString(),
+                                );
                           });
 
                           if (docs.isEmpty) {
@@ -557,10 +579,9 @@ class _BookingPageState extends State<BookingPage> {
                   child: SafeArea(
                     child: FilledButton.icon(
                       icon: const Icon(Icons.check_circle),
+                      // --- [แก้ไข] เปลี่ยนเงื่อนไข onPressed กลับมา ---
                       onPressed:
-                          (_isHoliday ||
-                              _isLoadingHoliday ||
-                              _isBooking) // (ปิดปุ่มถ้ากำลังจอง)
+                          (_isLoadingHolidayCheck || _isHoliday || _isBooking)
                           ? null
                           : () => _submit(busy),
                       style: FilledButton.styleFrom(
@@ -572,18 +593,21 @@ class _BookingPageState extends State<BookingPage> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                       ),
+                      // --- [แก้ไข] เปลี่ยน Label กลับมา ---
                       label: Text(
-                        _isHoliday
-                            ? _holidayReason
-                            : _selectedSlotIndex == null
-                            ? "กรุณาเลือกช่วงเวลา"
-                            : "ยืนยันการจอง: ${_fmtTime(kFixedSlots[_selectedSlotIndex!]['start']!)}–${_fmtTime(kFixedSlots[_selectedSlotIndex!]['end']!)}",
+                        _isLoadingHolidayCheck
+                            ? "กำลังตรวจสอบวันที่..."
+                            : _isHoliday
+                                ? _holidayReason // <-- แสดงเหตุผล
+                                : _selectedSlotIndex == null
+                                ? "กรุณาเลือกช่วงเวลา"
+                                : "ยืนยันการจอง: ${_fmtTime(kFixedSlots[_selectedSlotIndex!]['start']!)}–${_fmtTime(kFixedSlots[_selectedSlotIndex!]['end']!)}",
                       ),
                     ),
                   ),
                 ),
 
-                // ‼️ (เพิ่ม UX) Modal Loader ‼️
+                // (Modal Loader - ถูกต้องแล้ว)
                 if (_isBooking)
                   Container(
                     color: Colors.black.withOpacity(0.5),
@@ -615,11 +639,10 @@ class _BookingPageState extends State<BookingPage> {
   }
 }
 
-// ===== UI Components =====
+// ===== UI Components (ถูกต้องทั้งหมด ไม่ต้องแก้) =====
 
-// (UI Widget ใหม่สำหรับแสดง Grid 1-Hour Slots)
 class _FixedSlotGrid extends StatelessWidget {
-  final Set<String> busyKeys; // "HHmm"
+  final Set<String> busyKeys;
   final int? selectedIndex;
   final ValueChanged<int> onSelect;
 
@@ -629,11 +652,8 @@ class _FixedSlotGrid extends StatelessWidget {
     required this.onSelect,
   });
 
-  // (ดึง 15-min keys สำหรับ 1-hour slot ที่กำหนด)
   Set<String> _getKeysForSlot(int index) {
     final slot = _BookingPageState.kFixedSlots[index];
-    // (ย้าย Utilities มาเป็น static หรือ helper ภายนอก)
-    // (ในตัวอย่างนี้ เราจะเรียกใช้แบบ Instance ชั่วคราว)
     return _BookingPageState()._keysRange(slot['start']!, slot['end']!).toSet();
   }
 
@@ -651,7 +671,7 @@ class _FixedSlotGrid extends StatelessWidget {
         crossAxisSpacing: 10,
         childAspectRatio: 3.5,
       ),
-      itemCount: _BookingPageState.kFixedSlots.length, // 7 slots
+      itemCount: _BookingPageState.kFixedSlots.length,
       itemBuilder: (_, i) {
         final slot = _BookingPageState.kFixedSlots[i];
         final slotStart = slot['start']!;
@@ -721,7 +741,6 @@ class _SectionHeaderLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // ‼️ แก้ไข: ห่อ Padding ด้วย Flexible เพื่อป้องกัน Overflow
         Flexible(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -730,7 +749,7 @@ class _SectionHeaderLine extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-              overflow: TextOverflow.ellipsis, // กันข้อความยาวเกิน
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
@@ -835,5 +854,3 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
-
-// (ลบ _DayAvailabilityBar, _Legend, _SummaryChips เพราะ UI Grid ใหม่มาแทนที่)
