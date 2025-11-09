@@ -1,3 +1,5 @@
+// home_page.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -16,9 +18,6 @@ class HomePage extends StatefulWidget {
   static const maroon = Color(0xFF7A1F1F);
   // แก้ไข: เปลี่ยนชื่อจาก _bg เป็น bg (Public)
   static const bg = Color(0xFFF6F6F6);
-  // ลบตัวแปรสีที่ไม่ได้ใช้แล้วออก
-  // static const _blue = Color(0xFF1D4ED8);
-  // static const _orange = Color(0xFFF59E0B);
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -34,13 +33,15 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() => _refreshTick++);
   }
 
+  // ‼️ แก้ไข: ลบการนำทาง (Navigator) ที่ซ้ำซ้อนออก
   Future<void> _handleLogout() async {
     try {
       await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      // กลับหน้า Login และเคลียร์สแตก
-      Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+      // ไม่ต้องสั่ง Navigator.push... ที่นี่
+      // ปล่อยให้ Wrapper.dart ที่ฟัง authStateChanges()
+      // ทำหน้าที่เปลี่ยนหน้าไป LoginPage เอง
     } catch (e) {
+      // ตรวจสอบ mounted ก่อนใช้ context ใน catch block
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -255,24 +256,33 @@ class _ProfileSection extends StatelessWidget {
         }
 
         final data = snapshot.data?.data() ?? {};
+        // ใช้ displayName จาก Firebase Auth ถ้ามี, มิฉะนั้นใช้ studentId จาก Firestore
+        final authUser = FirebaseAuth.instance.currentUser;
+        final displayName = (authUser?.displayName?.isNotEmpty ?? false)
+            ? authUser!.displayName!
+            : (data['studentId'] ?? fallbackEmail?.split('@').first ?? '')
+                  .toString();
+
         final email = (data['email'] ?? fallbackEmail ?? '—').toString();
-        final studentId = (data['studentId'] ?? email.split('@').first)
-            .toString();
+        // NOTE: studentId ถูกแทนที่ด้วย displayName ในการแสดงผล Profile Card
         final role = (data['role'] ?? 'student').toString();
         final status = (data['status'] ?? 'active').toString();
-        final photoUrl = (data['photoUrl'] ?? fallbackPhoto);
+        // ใช้ photoUrl จาก Firebase Auth ถ้ามี
+        final photoUrl = (authUser?.photoURL?.isNotEmpty ?? false)
+            ? authUser!.photoURL
+            : (data['photoUrl'] ?? fallbackPhoto);
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _ProfileCard(
-            studentIdTitle: studentId.isEmpty
+            studentIdTitle: displayName.isEmpty
                 ? 'ยังไม่ได้ตั้งโปรไฟล์'
-                : studentId,
+                : displayName,
             email: email,
             role: role,
             status: status,
             photoUrl: photoUrl,
-            showSetupHint: studentId.isEmpty || email == '—',
+            showSetupHint: displayName.isEmpty || email == '—',
           ),
         );
       },
@@ -412,12 +422,10 @@ class _ProfileCard extends StatelessWidget {
                     if (showSetupHint)
                       TextButton(
                         onPressed: () {
-                          // จุดนี้คุณอาจพาไปหน้าแก้โปรไฟล์ในอนาคต
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'ไปที่หน้าแก้ไขโปรไฟล์ (เร็ว ๆ นี้)',
-                              ),
+                          // (การนำทางไป Settings ถูกจัดการใน _QuickActions แล้ว)
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const SettingsPage(),
                             ),
                           );
                         },
@@ -569,7 +577,6 @@ class _ActionTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  // ลบ final List<Color> colors; ออก และใช้สีเดิมตามที่ร้องขอ
   const _ActionTile({
     required this.icon,
     required this.label,
@@ -633,7 +640,7 @@ class _ActionTile extends StatelessWidget {
 class _SectionHeader extends StatelessWidget {
   final String title;
   final VoidCallback? onSeeAll;
- const _SectionHeader({super.key, required this.title, this.onSeeAll});
+  const _SectionHeader({super.key, required this.title, this.onSeeAll});
 
   @override
   Widget build(BuildContext context) {
@@ -884,8 +891,8 @@ class _EmptyState extends StatelessWidget {
   final String title;
   final String subtitle;
   final VoidCallback? onTap;
- const _EmptyState({
-    super.key, // Line 875 (After fix)
+  const _EmptyState({
+    super.key,
     required this.icon,
     required this.title,
     required this.subtitle,
@@ -893,6 +900,7 @@ class _EmptyState extends StatelessWidget {
   });
 
   @override
+  // ‼️‼️ แก้ไข: เปลี่ยน BuildContextF เป็น BuildContext ‼️‼️
   Widget build(BuildContext context) {
     final content = Container(
       padding: const EdgeInsets.all(16),

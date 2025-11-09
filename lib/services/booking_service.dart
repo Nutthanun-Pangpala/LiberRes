@@ -1,4 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:intl/intl.dart';
 
 class BookingService {
   static final _db = FirebaseFirestore.instance;
@@ -26,6 +29,7 @@ class BookingService {
 
   static Future<void> reserve({
     required String roomId,
+    required String roomName,
     required String date, // "YYYY-MM-DD"
     required String start, // "HH:mm"
     required String end, // "HH:mm"
@@ -35,7 +39,6 @@ class BookingService {
     final slots = _slotKeys(start, end);
     if (slots.isEmpty) throw Exception("เวลาไม่ถูกต้อง");
 
-    // ✅ โหนดวันที่ต้องเป็น 'doc' ก่อนค่อยลงไป 'slots'
     final dayDoc = _db
         .collection("reservations")
         .doc(roomId)
@@ -64,6 +67,7 @@ class BookingService {
       // 3) เขียนใบจองรวม
       tx.set(bookingRef, {
         "roomId": roomId,
+        "roomName": roomName,
         "uid": uid ?? "guest",
         "date": date,
         "start": start,
@@ -102,17 +106,17 @@ class BookingService {
       tx.update(bookingRef, {"status": "canceled"});
     });
   }
-  // ... โค้ดของ BookingService.cancel() ที่มีอยู่
+
 
   // --- START: NEW ADMIN CANCEL FUNCTION ---
-
+  // (อันนี้คุณเพิ่มมา ดีเลยครับ!)
   static Future<void> adminCancel({
     required String bookingId,
     required String roomId,
     required String date, // "YYYY-MM-DD"
     required String start, // "HH:mm"
     required String end, // "HH:mm"
-    String reason = 'Admin cancelled (e.g., No-Show or Abuse)', 
+    String reason = 'Admin cancelled (e.g., No-Show or Abuse)',
   }) async {
     final slots = _slotKeys(start, end);
     final dayDoc = _db
@@ -128,15 +132,88 @@ class BookingService {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         tx.delete(slotRef);
       }
-      // 2) อัพเดตสถานะการจองเป็น 'admin_canceled' 
+      // 2) อัพเดตสถานะการจองเป็น 'admin_canceled'
       tx.update(bookingRef, {
         "status": "admin_canceled", // สถานะใหม่สำหรับการยกเลิกโดย admin
         "cancellationReason": reason,
-        "canceledByAdminAt": FieldValue.serverTimestamp(), // เปลี่ยน field เพื่อให้ track ได้
+        "canceledByAdminAt": FieldValue.serverTimestamp(),
       });
     });
   }
 
   // --- END: NEW ADMIN CANCEL FUNCTION ---
-}
 
+// --- START: NEW SYNC HOLIDAYS FUNCTION ---
+  static Future<void> syncHolidaysFromAPI(int year) async {
+    try {
+      // 1. เรียก API วันหยุดประเทศไทย (TH)
+      final response = await http.get(
+          Uri.parse('https://date.nager.at/api/v3/PublicHolidays/$year/TH'));
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to load holidays from API');
+      }
+
+      // 2. แปลง JSON
+      List<dynamic> apiHolidays = jsonDecode(response.body);
+
+      WriteBatch batch = _db.batch();
+      CollectionReference holidaysCollection = _db.collection('holidays');
+      int count = 0;
+
+      for (var holiday in apiHolidays) {
+        DateTime holidayDate = DateTime.parse(holiday['date']);
+        String description = holiday['name']; // 👈 นี่คือชื่อวันหยุดไทย
+        String dateId = DateFormat('yyyy-MM-dd').format(holidayDate);
+
+        final data = {
+          'description': description,
+          'date': Timestamp.fromDate(holidayDate),
+          'isManual': false, // 👈 มาจาก API
+        };
+
+        // 3. ใช้ .set(..., SetOptions(merge: true))
+        // เพื่อ *อัปเดต* วันหยุด API โดยไม่เขียนทับวันที่แอดมินเพิ่มเอง
+        var docRef = holidaysCollection.doc(dateId);
+        batch.set(docRef, data, SetOptions(merge: true));
+        count++;
+      }
+
+      await batch.commit();
+      print('Successfully synced $count holidays for $year.');
+
+    } catch (e) {
+      print('Error syncing holidays: $e');
+      rethrow;
+    }
+  }
+  // --- END: NEW SYNC HOLIDAYS FUNCTION ---
+  
+  // --- START: NEW ADD ROOM FUNCTION (CORRECTED) ---
+  // (ย้ายมาไว้ข้างใน class และใช้ static _db)
+  static Future<void> addRoom({
+    required String roomName,
+    required int capacity,
+    required List<String> equipment,
+  }) async {
+    try {
+      // อ้างอิงไปยัง Collection 'rooms' โดยใช้ _db ที่มีอยู่
+      CollectionReference rooms = _db.collection('rooms');
+
+      // เพิ่มข้อมูลห้องใหม่
+      await rooms.add({
+        'roomName': roomName,
+        'capacity': capacity,
+        'equipment': equipment,
+        'createdAt': FieldValue.serverTimestamp(), // Optional: เพื่อเก็บเวลาที่สร้าง
+      });
+      print('Room Added Successfully');
+    } catch (e) {
+      print('Error adding room: $e');
+      // คุณอาจจะ re-throw หรือจัดการ error นี้ใน UI
+      rethrow;
+    }
+  }
+  // --- END: NEW ADD ROOM FUNCTION ---
+
+} // <-- นี่คือวงเล็บปิดท้าย Class ครับ
