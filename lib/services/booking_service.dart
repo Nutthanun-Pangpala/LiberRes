@@ -24,12 +24,14 @@ class BookingService {
     var cur = start;
     while (cur.isBefore(end)) {
       keys.add(_toHHmmKey(cur));
+      // (สมมติ 15 นาที)
       cur = cur.add(const Duration(minutes: 15));
     }
     return keys;
   }
 
-  // --- [Logic แก้ไข] reserve (เพิ่มการตรวจสอบ) ---
+  // --- [Logic เก่า 1] reserve (จอง + อนุมัติทันที) ---
+  /// ตัวอย่างปรับปรุง reserve(...) — แนะนำให้ใช้แทนเวอร์ชันเก่า
   static Future<void> reserve({
     required String roomId,
     required String roomName,
@@ -39,24 +41,20 @@ class BookingService {
     String? uid,
     String? userName,
     String? purpose,
+    bool force =
+        false, // ถ้า true: พยายามอนุญาตแม้เป็นวันหยุด (ต้องตรวจสิทธิ์เพิ่มเติม)
   }) async {
     final slots = _slotKeys(start, end);
     if (slots.isEmpty) throw Exception("เวลาไม่ถูกต้อง");
 
-    // ‼️ [เพิ่มจุดที่ 1] ตรวจสอบเสาร์-อาทิตย์ ‼️
-    final DateTime bookingDate;
-    try {
-      bookingDate = DateTime.parse(date); // date คือ "YYYY-MM-DD"
-    } catch (e) {
-      throw Exception("รูปแบบวันที่ ($date) ไม่ถูกต้อง");
-    }
+    final holidaysRef = _db.collection('holidays').doc(date);
 
-    if (bookingDate.weekday == DateTime.saturday ||
-        bookingDate.weekday == DateTime.sunday) {
-      throw Exception("ไม่สามารถจองได้: ปิดทำการ (วันเสาร์-อาทิตย์)");
+    // 1) เบื้องต้น: ถ้าเป็นวันหยุดและไม่ได้ force ให้หยุดทันที (เร็ว)
+    final holidaySnapshot = await holidaysRef.get();
+    if (holidaySnapshot.exists && !force) {
+      final desc = (holidaySnapshot.data()?['description'] ?? 'วันหยุด');
+      throw Exception('ไม่สามารถจองได้ในวันหยุด: $desc');
     }
-    // ‼️ [จบจุดที่ 1] ‼️
-
 
     final dayDoc = _db
         .collection("reservations")
@@ -66,24 +64,16 @@ class BookingService {
 
     final bookingRef = _db.collection("bookings").doc();
 
-    // ‼️ [เพิ่มจุดที่ 2] อ้างอิง doc วันหยุด ‼️
-    // เราจะใช้ 'date' (YYYY-MM-DD) ซึ่งตรงกับ ID ของ collection 'holidays'
-    final holidayDocRef = _db.collection("holidays").doc(date);
-    // ‼️ [จบจุดที่ 2] ‼️
-
-
+    // 2) ทำตรวจสอบสำคัญทั้งหมดใน transaction อีกครั้ง (รวมเช็ก holiday เพื่อป้องกัน race)
     await _db.runTransaction((tx) async {
-    
-      // ‼️ [เพิ่มจุดที่ 3] ตรวจสอบวันหยุด (ต้องทำใน Transaction) ‼️
-      final holidaySnap = await tx.get(holidayDocRef);
-      if (holidaySnap.exists) {
-        final reason = holidaySnap.data()?['description'] ?? 'ปิดทำการ';
-        // โยน Error ออกไปให้หน้าบ้านรับทราบ
-        throw Exception("ไม่สามารถจองได้: $date ($reason)");
+      // ตรวจ holiday อีกครั้งภายใน transaction
+      final holidaySnapInTx = await tx.get(holidaysRef);
+      if (holidaySnapInTx.exists && !force) {
+        final desc = (holidaySnapInTx.data()?['description'] ?? 'วันหยุด');
+        throw Exception('ไม่สามารถจองได้ในวันหยุด: $desc');
       }
-      // ‼️ [จบจุดที่ 3] ‼️
 
-      // 1) ตรวจ slot ว่าง (โค้ดเดิม)
+      // 1) ตรวจ slot ว่าง
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         final snap = await tx.get(slotRef);
@@ -91,7 +81,8 @@ class BookingService {
           throw Exception("ช่วง $start-$end ของ $date ถูกจองแล้ว");
         }
       }
-      // 2) ยึด slot (โค้ดเดิม)
+
+      // 2) ยึด slot
       final now = FieldValue.serverTimestamp();
       for (final hhmm in slots) {
         tx.set(dayDoc.collection("slots").doc(hhmm), {
@@ -100,7 +91,10 @@ class BookingService {
           "bookingId": bookingRef.id,
         });
       }
-      // 3) เขียนใบจองรวม (โค้ดเดิม)
+
+      // 3) เขียนใบจองรวม — แนะนำตั้งเป็น pending หากต้องการ workflow ตรวจสอบ
+      final bool autoApprove =
+          !holidaySnapshot.exists; // ตัวอย่าง: อนุมัติอัตโนมัติถ้าไม่ใช่วันหยุด
       tx.set(bookingRef, {
         "roomId": roomId,
         "roomName": roomName,
@@ -110,14 +104,18 @@ class BookingService {
         "start": start,
         "end": end,
         "purpose": purpose ?? "",
-        "status": "approved", 
+        "status": autoApprove ? "approved" : "pending",
         "createdAt": now,
+        // audit (ถ้ามีการ force ให้บันทึก)
+        if (force) "forcedBy": uid ?? "unknown",
+        if (force) "forcedAt": now,
+        if (holidaySnapshot.exists)
+          "holidayReason":
+              (holidaySnapshot.data()?['description'] ?? 'วันหยุด'),
       });
     });
   }
 
-  // --- (โค้ดส่วนที่เหลือ... cancel, adminCancel, addRoom, syncHolidays) ---
-  // ... (วางโค้ดส่วนที่เหลือของ service.dart ที่คุณมี) ...
   // --- [Logic เก่า 2] cancel (User ยกเลิกเอง) ---
   static Future<void> cancel({
     required String bookingId,
@@ -139,6 +137,7 @@ class BookingService {
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         final snap = await tx.get(slotRef);
+        // (เช็คว่าเป็นเจ้าของ Slot จริง)
         if (snap.exists && snap.data()?["by"] == uid) {
           tx.delete(slotRef);
         }
@@ -165,10 +164,12 @@ class BookingService {
     final bookingRef = _db.collection("bookings").doc(bookingId);
 
     await _db.runTransaction((tx) async {
+      // 1) ลบ slots (Admin ลบได้เลย ไม่ต้องเช็ค)
       for (final hhmm in slots) {
         final slotRef = dayDoc.collection("slots").doc(hhmm);
         tx.delete(slotRef);
       }
+      // 2) อัพเดตสถานะ
       tx.update(bookingRef, {
         "status": "admin_canceled",
         "cancellationReason": reason,
